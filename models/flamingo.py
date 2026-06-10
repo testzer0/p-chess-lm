@@ -309,11 +309,15 @@ class FlamingoChessLM(ChessLMPreTrainedModel):
         return groups
 
     def get_diagnostics(self) -> dict[str, float]:
+        def _alpha(p):  # gather the sharded DTensor under FSDP2; plain tensor otherwise
+            if hasattr(p, "full_tensor"):
+                p = p.full_tensor()
+            return torch.tanh(p.float()).item()
         return {
-            f"alpha_attn/layer_{i:02d}": torch.tanh(layer.alpha_attn.float()).item()
+            f"alpha_attn/layer_{i:02d}": _alpha(layer.alpha_attn)
             for i, layer in enumerate(self.x_attn_layers)
         } | {
-            f"alpha_ffn/layer_{i:02d}": torch.tanh(layer.alpha_ffn.float()).item()
+            f"alpha_ffn/layer_{i:02d}": _alpha(layer.alpha_ffn)
             for i, layer in enumerate(self.x_attn_layers)
         }
 
