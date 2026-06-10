@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+
+# Model weights and checkpoints
+*.pt
+*.ckpt
+*.safetensors
+*.bin
+*.npz
+*.npy
+*.pkl
+
+# Training run directories
+chesslm/runs/
+chesslm/runs_dryrun/
+chesslm/encoder/
+hanoi/checkpoints/
+chesslm/smoke_tests/probe_exps/probe_outputs/
+
+# HuggingFace datasets (binary arrow files)
+*.arrow
+chesslm/datasets/
+
+# Raw data files
+chesslm/raw_data/
+
+# SLURM logs
+chesslm/logs/
+hanoi/logs/
+
+# Nested git repos (tracked separately)
+verl/
+
+# Generated plots/figures
+*.png
