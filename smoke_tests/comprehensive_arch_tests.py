@@ -1,6 +1,6 @@
-"""Comprehensive correctness tests for the three chess-LM architectures.
+"""Comprehensive correctness tests for the chess-LM architectures.
 
-Covers FlamingoChessLM, LLaVAChessLM, KVProjChessLM at lora_rank in {-1, 0, 8}.
+Covers FlamingoChessLM, LLaVAChessLM at lora_rank in {-1, 0, 8}.
 
 Run all:                  python chesslm/smoke_tests/comprehensive_arch_tests.py
 Run one test by name:     python chesslm/smoke_tests/comprehensive_arch_tests.py test_apply_lora_rank_negative_freezes
@@ -37,7 +37,7 @@ import torch
 import torch.nn.functional as F
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
-from chesslm.models import FlamingoChessLM, KVProjChessLM, LLaVAChessLM
+from chesslm.models import FlamingoChessLM, LLaVAChessLM
 from chesslm.models.base import (
     apply_lora,
     decoder_trainable_params,
@@ -88,8 +88,6 @@ def _build_arch(arch, lora_rank, dev):
         model = FlamingoChessLM(decoder, n_new_tokens=N_NEW, lora_rank=lora_rank)
     elif arch == 'llava':
         model = LLaVAChessLM(decoder, n_new_tokens=N_NEW, lora_rank=lora_rank)
-    elif arch == 'kv_proj':
-        model = KVProjChessLM(decoder, n_new_tokens=N_NEW, lora_rank=lora_rank)
     else:
         raise ValueError(f'unknown arch {arch!r}')
 
@@ -100,10 +98,6 @@ def _build_arch(arch, lora_rank, dev):
         model.connector.to(device=dev, dtype=DTYPE)
         model.file_embed.to(device=dev, dtype=DTYPE)
         model.rank_embed.to(device=dev, dtype=DTYPE)
-    elif arch == 'kv_proj':
-        model.layer_norm.to(device=dev, dtype=DTYPE)
-        model.W_K.to(device=dev, dtype=DTYPE)
-        model.W_V.to(device=dev, dtype=DTYPE)
     # new_embed / new_lm_head are already allocated on dev/DTYPE inside __init__
     # via init_new_token_embeddings — no post-hoc cast needed (which would sever
     # weight tying). Matches the real from_pretrained flow.
@@ -126,7 +120,7 @@ def _make_inputs(B, S, dev, frozen_vocab):
 
 
 def _arch_cls(arch):
-    return {'flamingo': FlamingoChessLM, 'llava': LLaVAChessLM, 'kv_proj': KVProjChessLM}[arch]
+    return {'flamingo': FlamingoChessLM, 'llava': LLaVAChessLM}[arch]
 
 
 # ============================================================================
@@ -361,7 +355,7 @@ def test_sample_next_token_greedy_picks_argmax_bf16():
 # Each test loops over (arch, rank); each iteration builds a fresh model.
 # ============================================================================
 
-ARCHS = ('flamingo', 'llava', 'kv_proj')
+ARCHS = ('flamingo', 'llava')
 
 
 def test_init_succeeds_for_all_arch_rank_combinations():
@@ -459,7 +453,7 @@ def test_param_groups_non_empty_and_optimizer_constructs():
     """param_groups(lr) should never contain an empty 'params' list, and the
     list should construct a valid AdamW optimizer.
 
-    This guards against the LLaVA/KVProj + lora_rank<0 footgun where the
+    This guards against the LLaVA + lora_rank<0 footgun where the
     decoder param group is [].
     """
     print('=== test_param_groups_non_empty_and_optimizer_constructs ===')
@@ -862,7 +856,7 @@ def test_from_pretrained_signatures_accept_lora_rank():
 
 
 def test_default_lora_rank_per_arch():
-    """Default lora_rank per spec: Flamingo=-1 (frozen), LLaVA=0, KVProj=0."""
+    """Default lora_rank per spec: Flamingo=-1 (frozen), LLaVA=0."""
     print('=== test_default_lora_rank_per_arch ===')
     import inspect
     defaults = {}
@@ -871,7 +865,6 @@ def test_default_lora_rank_per_arch():
         defaults[arch] = sig.parameters['lora_rank'].default
     assert defaults['flamingo'] == -1, f'flamingo default is {defaults["flamingo"]}, expected -1'
     assert defaults['llava'] == 0, f'llava default is {defaults["llava"]}, expected 0'
-    assert defaults['kv_proj'] == 0, f'kv_proj default is {defaults["kv_proj"]}, expected 0'
     print(f'  defaults: {defaults}  OK')
 
 
@@ -892,29 +885,29 @@ def test_flamingo_diagnostics_includes_alpha_gates():
     _free(model)
 
 
-def test_llava_kv_proj_diagnostics_empty():
-    """LLaVA and KVProj currently return empty diagnostics (no LoRA scale tracking)."""
-    print('=== test_llava_kv_proj_diagnostics_empty ===')
+def test_llava_diagnostics_empty():
+    """LLaVA currently returns empty diagnostics (no LoRA scale tracking)."""
+    print('=== test_llava_diagnostics_empty ===')
     dev = _device()
-    for arch in ('llava', 'kv_proj'):
+    for arch in ('llava',):
         model = _build_arch(arch, 0, dev)
         diag = model.get_diagnostics()
         assert diag == {}, f'{arch}: expected empty diagnostics, got {list(diag)[:3]}'
         _free(model)
-    print('  LLaVA / KVProj diagnostics empty as documented  OK')
+    print('  LLaVA diagnostics empty as documented  OK')
 
 
-def test_position_ids_offset_contract_llava_kv_proj():
-    """For LLaVA and KVProj, the caller supplies 0-based text position_ids and
+def test_position_ids_offset_contract_llava():
+    """For LLaVA, the caller supplies 0-based text position_ids and
     the model internally offsets by N_ENC_SQUARES.
 
     This codifies the (recently changed) contract so any future regression is
     loud. Test: passing position_ids vs. not passing them should produce the
     same logits for arange(S) text positions."""
-    print('=== test_position_ids_offset_contract_llava_kv_proj ===')
+    print('=== test_position_ids_offset_contract_llava ===')
     dev = _device()
     B, S = 1, 10
-    for arch in ('llava', 'kv_proj'):
+    for arch in ('llava',):
         model = _build_arch(arch, -1, dev)
         model.eval()
         frozen_vocab = model._base_decoder.config.vocab_size
@@ -1007,8 +1000,8 @@ def test_lora_rank_zero_decoder_in_trainable_state_dict():
 
 def test_lora_rank_negative_omits_decoder_for_all_arch():
     """rank=-1: "decoder" key MUST be absent from trainable_state_dict for all
-    three architectures. Decoder is frozen — saving its state wastes GBs per
-    checkpoint and is what Flamingo has always done; LLaVA/KVProj now match."""
+    architectures. Decoder is frozen — saving its state wastes GBs per
+    checkpoint and is what Flamingo has always done; LLaVA now matches."""
     print('=== test_lora_rank_negative_omits_decoder_for_all_arch ===')
     dev = _device()
     for arch in ARCHS:
@@ -1114,29 +1107,6 @@ def test_llava_prefix_attention_mask_extended():
     _free(model)
 
 
-def test_kv_proj_modes_construct():
-    """Both proj_modes should construct and forward."""
-    print('=== test_kv_proj_modes_construct ===')
-    dev = _device()
-    B, S = 1, 6
-    for mode in ('channel_concat', 'interleaved'):
-        dec = _load_fresh_decoder(dev)
-        model = KVProjChessLM(dec, n_new_tokens=N_NEW, proj_mode=mode, lora_rank=-1)
-        model.layer_norm.to(device=dev, dtype=DTYPE)
-        model.W_K.to(device=dev, dtype=DTYPE)
-        model.W_V.to(device=dev, dtype=DTYPE)
-        model.new_embed.to(device=dev, dtype=DTYPE)
-        model.new_lm_head.to(device=dev, dtype=DTYPE)
-        model.eval()
-        frozen_vocab = model._base_decoder.config.vocab_size
-        ids, enc, attn = _make_inputs(B, S, dev, frozen_vocab)
-        with torch.no_grad():
-            logits = model(ids, enc, attn)
-        assert logits.shape == (B, S, frozen_vocab + N_NEW)
-        print(f'  proj_mode={mode}: shape OK')
-        _free(model)
-
-
 def test_flamingo_x_attn_layers_actually_in_residual_path():
     """Sanity check: perturbing alpha_attn should change the Flamingo forward output."""
     print('=== test_flamingo_x_attn_layers_actually_in_residual_path ===')
@@ -1236,8 +1206,8 @@ GROUP_C = [
     test_from_pretrained_signatures_accept_lora_rank,
     test_default_lora_rank_per_arch,
     test_flamingo_diagnostics_includes_alpha_gates,
-    test_llava_kv_proj_diagnostics_empty,
-    test_position_ids_offset_contract_llava_kv_proj,
+    test_llava_diagnostics_empty,
+    test_position_ids_offset_contract_llava,
     test_left_pad_position_ids_invariance_per_arch,
     test_lora_rank_zero_decoder_in_trainable_state_dict,
     test_lora_rank_negative_omits_decoder_for_all_arch,
@@ -1245,7 +1215,6 @@ GROUP_C = [
     test_flamingo_peft_compatibility_with_manual_layer_loop,
     test_unwrap_decoder_config_access_works_for_all_arch_rank,
     test_llava_prefix_attention_mask_extended,
-    test_kv_proj_modes_construct,
     test_flamingo_x_attn_layers_actually_in_residual_path,
     test_tokenizer_alignment_with_n_new_tokens,
     test_param_groups_decoder_lr_zero_when_frozen,

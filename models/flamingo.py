@@ -4,6 +4,8 @@ import torch.nn.functional as F
 from transformers.masking_utils import create_causal_mask
 
 from chesslm.models.base import (
+    ChessLMConfig,
+    ChessLMPreTrainedModel,
     apply_lora,
     decoder_trainable_params,
     init_new_token_embeddings,
@@ -147,7 +149,7 @@ class DenseXAttn(nn.Module):
 
 # --- FlamingoChessLM ---
 
-class FlamingoChessLM(nn.Module):
+class FlamingoChessLM(ChessLMPreTrainedModel):
     """
     Frozen SmolLM3 3B decoder bridged to a frozen LC0 chess encoder via 16
     trainable DenseXAttn sublayers (Flamingo-style gated cross-attention).
@@ -179,7 +181,7 @@ class FlamingoChessLM(nn.Module):
         lora_rank: int = -1,
         x_attn_kwargs: dict = None,
     ):
-        super().__init__()
+        super().__init__(ChessLMConfig())
 
         self.lora_rank = lora_rank
         self.decoder   = apply_lora(decoder, lora_rank)
@@ -213,6 +215,7 @@ class FlamingoChessLM(nn.Module):
         encoder_hidden_states: torch.Tensor,
         attention_mask: torch.Tensor = None,
         position_ids: torch.Tensor = None,
+        labels: torch.Tensor = None,
     ) -> torch.Tensor:
         B, S = input_ids.shape
         device = input_ids.device
@@ -258,6 +261,8 @@ class FlamingoChessLM(nn.Module):
             )
 
         h = base.model.norm(h)
+        if labels is not None:
+            return self._loss_from_hidden(h, labels)
         logits = base.lm_head(h)
         if self.n_new_tokens > 0:
             logits = torch.cat([logits, self.new_lm_head(h)], dim=-1)

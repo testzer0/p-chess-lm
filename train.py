@@ -124,9 +124,7 @@ def parse_args():
 
     # --- model ---
     g = parser.add_argument_group("model")
-    g.add_argument("--arch",      choices=["flamingo", "llava", "kv_proj"], default="flamingo")
-    g.add_argument("--proj-mode", choices=["channel_concat", "interleaved"], default="channel_concat",
-                   help="KV projection mode (kv_proj arch only)")
+    g.add_argument("--arch",      choices=["flamingo", "llava"], default="flamingo")
     g.add_argument("--lora-rank", type=int, default=-1,
                    help="LoRA rank: <0 = frozen decoder, 0 = full fine-tuning, >0 = LoRA adapters")
     g.add_argument("--decoder-path", required=True)

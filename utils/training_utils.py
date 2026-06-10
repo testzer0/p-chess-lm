@@ -15,7 +15,7 @@ from transformers import (
 )
 
 from chesslm.encoder.lc0_hf_bt5.hf_model import Lc0Bt4HFModel
-from chesslm.models import FlamingoChessLM, KVProjChessLM, LLaVAChessLM
+from chesslm.models import FlamingoChessLM, LLaVAChessLM
 from chesslm.models.base import unwrap_decoder
 from chesslm.utils.utils import (
     ANSWER_SPECIAL_TOKENS,
@@ -50,7 +50,7 @@ def _mean_embedding(embed_weight: torch.Tensor, tokenizer, text: str) -> torch.T
 
 
 def init_special_token_embeddings(
-    model,  # any ChessLM-conforming arch (Flamingo / LLaVA / KVProj)
+    model,  # any ChessLM-conforming arch (Flamingo / LLaVA)
     tokenizer,
     strategy: str,
     pov: bool = False,
@@ -225,16 +225,6 @@ def init_model_and_tokenizer(args, special_tokens: list[str] = None, pov: bool =
         model = LLaVAChessLM.from_pretrained(
             args.decoder_path,
             n_new_tokens=n_new_tokens,
-            lora_rank=getattr(args, "lora_rank", 0),
-            device=device,
-            torch_dtype=amp_dtype,
-            local_files_only=True,
-        )
-    elif arch == "kv_proj":
-        model = KVProjChessLM.from_pretrained(
-            args.decoder_path,
-            n_new_tokens=n_new_tokens,
-            proj_mode=getattr(args, "proj_mode", "channel_concat"),
             lora_rank=getattr(args, "lora_rank", 0),
             device=device,
             torch_dtype=amp_dtype,
