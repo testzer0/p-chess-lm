@@ -6,14 +6,14 @@ import time
 from pathlib import Path
 
 import numpy as np
-from itertools import chain, repeat
 
 import torch
 from accelerate import Accelerator, FullyShardedDataParallelPlugin
+from accelerate.utils import DataLoaderConfiguration
 
 from chesslm.utils.training_utils import initialize_training_objects, post_eval
 from chesslm.utils.eval_utils import run_eval
-from chesslm.utils.utils import encode_positions
+from chesslm.utils.utils import encode_planes
 
 
 # ---------------------------------------------------------------------------
@@ -166,6 +166,7 @@ def main():
     )
     accelerator = Accelerator(
         gradient_accumulation_steps=args.grad_accum_steps,
+        dataloader_config=DataLoaderConfiguration(use_stateful_dataloader=True),
         fsdp_plugin=fsdp_plugin,
     )
     device = accelerator.device
@@ -188,7 +189,6 @@ def main():
      optimizer, scheduler,
      amp_dtype, special_token_ids, id_to_special,
      dataset_cfg) = initialize_training_objects(args)
-    encode_pov = dataset_cfg.get("pov", False)
 
     # Shard the model + optimizer + scheduler + dataloader across ranks. The
     # frozen encoder is not trained, so it stays replicated (not prepared).
@@ -208,8 +208,6 @@ def main():
         start_step = load_checkpoint(accelerator, args.resume_from)
         accelerator.print(f"Resumed from step {start_step}")
 
-    train_iter = chain.from_iterable(repeat(train_loader))
-
     def do_eval(step: int, jsonl_file, txt_file, train_loss: float | None = None) -> None:
         # Runs on every rank — generation forwards trigger FSDP all-gathers, so
         # all ranks must participate — but only the main process logs / saves.
@@ -221,7 +219,6 @@ def main():
             args.eval_batch_size, args.eval_max_new_tokens,
             temperature=args.temperature, top_k=args.top_k, top_p=args.top_p,
             max_examples=args.eval_max_examples,
-            encode_pov=encode_pov,
         )
         diag = get_diagnostics(accelerator.unwrap_model(model))
         full_metrics = ({"train_loss": train_loss} if train_loss is not None else {}) | metrics | diag
@@ -232,7 +229,7 @@ def main():
             log_metrics(step, full_metrics, jsonl_file, txt_file)
             if verbose and args.log_samples > 0:
                 for s in samples[:args.log_samples]:
-                    print(f"  [{s['qt']}] {s['question'][:60]} → {s['generated'][:80]}")
+                    print(f"  [{s['task']}] {s['prompt'][:60]} → {s['generated'][:80]}")
         accelerator.print(f"[eval] done ({time.time() - t_eval:.1f}s) — {len(samples)} generations")
         post_eval(args, accelerator.unwrap_model(model))
 
@@ -243,6 +240,13 @@ def main():
     if args.eval_at_start:
         do_eval(start_step, jsonl_file, txt_file)
 
+    # Deterministic resumption is handled by the stateful dataloader: its
+    # iteration state is saved/restored by accelerator.save_state/load_state, so
+    # a resumed run continues mid-epoch from exactly where it stopped — no manual
+    # epoch/offset bookkeeping. The while-loop just starts a fresh epoch each
+    # time the loader is exhausted (the stateful loader reshuffles + tracks it).
+    global_step = start_step
+
     optimizer.zero_grad()
     accelerator.print(
         f"Training started — {args.n_steps} steps, batch={args.batch_size}, "
@@ -250,22 +254,18 @@ def main():
         f"effective_batch={args.batch_size * args.grad_accum_steps * accelerator.num_processes}"
     )
 
-    step_iter = range(start_step, args.n_steps)
+    pbar = None
     if verbose and accelerator.is_main_process:
         from tqdm import tqdm
-        step_iter = tqdm(step_iter, desc="train", dynamic_ncols=True)
+        pbar = tqdm(total=args.n_steps, initial=start_step, desc="train", dynamic_ncols=True)
 
-    for step in step_iter:
-
-        # --- gradient accumulation (accelerate gates grad sync + optimizer step) ---
-        accum_loss = 0.0
-        for _ in range(args.grad_accum_steps):
-            batch = next(train_iter)
+    running_loss = 0.0
+    done = global_step >= args.n_steps
+    while not done:
+        for batch in train_loader:
+            # accelerate gates grad sync + optimizer step over grad_accum_steps.
             with accelerator.accumulate(model):
-                enc_hidden = encode_positions(
-                    encoder, batch["start_fens"], batch["moves"], batch["fens"],
-                    device, amp_dtype, pov=encode_pov,
-                )
+                enc_hidden = encode_planes(encoder, batch["planes"], amp_dtype)
                 with torch.autocast(device_type=device.type, dtype=amp_dtype):
                     loss = model(batch["input_ids"], enc_hidden,
                                  batch["attention_mask"], labels=batch["labels"])
@@ -275,17 +275,27 @@ def main():
                 optimizer.step()
                 scheduler.step()
                 optimizer.zero_grad()
-                accum_loss += loss.item() / args.grad_accum_steps
 
-        if verbose and accelerator.is_main_process:
-            step_iter.set_postfix(loss=f"{accum_loss:.4f}")
-        elif (step + 1) % 50 == 0:
-            accelerator.print(f"[step {step + 1}/{args.n_steps}] loss={accum_loss:.4f}")
+            running_loss += loss.item() / args.grad_accum_steps
+            if not accelerator.sync_gradients:
+                continue
 
-        # --- eval + checkpoint ---
-        if (step + 1) % args.eval_freq == 0:
-            do_eval(step + 1, jsonl_file, txt_file, train_loss=accum_loss)
-            save_checkpoint(accelerator, run_dir, step + 1)
+            # One full optimizer step completed.
+            global_step += 1
+            if pbar is not None:
+                pbar.update(1)
+                pbar.set_postfix(loss=f"{running_loss:.4f}")
+            elif global_step % 50 == 0:
+                accelerator.print(f"[step {global_step}/{args.n_steps}] loss={running_loss:.4f}")
+
+            if global_step % args.eval_freq == 0:
+                do_eval(global_step, jsonl_file, txt_file, train_loss=running_loss)
+                save_checkpoint(accelerator, run_dir, global_step)
+
+            running_loss = 0.0
+            if global_step >= args.n_steps:
+                done = True
+                break
 
     if accelerator.is_main_process:
         if jsonl_file is not None:

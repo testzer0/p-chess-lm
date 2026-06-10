@@ -162,3 +162,15 @@ def encode_positions(
                 hidden[i] = hidden[i, :, black_idx, :]
 
     return hidden
+
+
+def encode_planes(encoder, planes: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
+    """Run the lc0 encoder on pre-built planes -> hidden states (B, 16, 64, 1024).
+
+    The planes come from our lc0_planes builder and are already POV-relative
+    (oriented to the side to move), so no post-hoc flip is needed — this matches
+    encode_positions(pov=True). The encoder is frozen, so it runs under no_grad.
+    """
+    with torch.no_grad():
+        out = encoder(planes, output_hidden_states=True)
+        return torch.stack(out.all_hidden_states, dim=1).to(dtype)

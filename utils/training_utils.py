@@ -17,6 +17,16 @@ from transformers import (
 from chesslm.encoder.lc0_hf_bt5.hf_model import Lc0Bt4HFModel
 from chesslm.models import FlamingoChessLM, LLaVAChessLM
 from chesslm.models.base import unwrap_decoder
+from chesslm.utils.instance_format import (
+    KEY_EXTRA,
+    KEY_FEN,
+    KEY_HISTORY,
+    KEY_PROMPT,
+    KEY_RESPONSE,
+    to_standard_instance,
+    tokenize_instance,
+)
+from chesslm.utils.lc0_planes import encode_fen_batch
 from chesslm.utils.utils import (
     ANSWER_SPECIAL_TOKENS,
     POV_ANSWER_SPECIAL_TOKENS,
@@ -114,67 +124,38 @@ def init_special_token_embeddings(
 # Collation
 # ---------------------------------------------------------------------------
 
-def collate_fn(
-    batch: list[dict],
-    *,
-    tokenizer,
-    system_prompt: str,
-    max_seq_len: int,
-) -> dict:
-    """Tokenize + right-pad a batch to the longest sequence in the batch.
+def collate_fn(batch: list[dict], *, tokenizer, max_seq_len: int) -> dict:
+    """Collate standardized {fen, history, prompt, response, extra} rows.
 
-    Labels are -100 on the prompt (system + user + assistant prefix) and
-    the actual token IDs on the answer (answer text + parse tag + <|im_end|>).
+    Tokenizes prompt+response with the prompt span masked to -100 and EOS
+    appended (instance_format.tokenize_instance), right-pads, and builds the lc0
+    input planes from fen + history. ``extra`` is carried for eval only and is
+    not forwarded to the model.
     """
     pad_id = tokenizer.pad_token_id or tokenizer.eos_token_id
-    input_ids_list, labels_list = [], []
+    cap = max_seq_len or None
+    std = [to_standard_instance(ex) for ex in batch]
+    toks = [tokenize_instance(tokenizer, s[KEY_PROMPT], s[KEY_RESPONSE], max_length=cap) for s in std]
 
-    for ex in batch:
-        full_msgs = [
-            {"role": "system",    "content": system_prompt},
-            {"role": "user",      "content": ex["question"]},
-            {"role": "assistant", "content": ex["answer"]},
-        ]
-        prompt_msgs = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user",   "content": ex["question"]},
-        ]
-
-        full_ids   = tokenizer.apply_chat_template(full_msgs,   tokenize=True, add_generation_prompt=False)
-        prompt_ids = tokenizer.apply_chat_template(prompt_msgs, tokenize=True, add_generation_prompt=True)
-
-        # Safety truncation — preserves prompt; silently drops tail of very long answers
-        if len(full_ids) > max_seq_len:
-            full_ids = full_ids[:max_seq_len]
-
-        prompt_len = min(len(prompt_ids), len(full_ids))
-        labels     = [-100] * prompt_len + full_ids[prompt_len:]
-
-        input_ids_list.append(full_ids)
-        labels_list.append(labels)
-
-    max_len = max(len(ids) for ids in input_ids_list)
-    B = len(batch)
-
-    input_ids  = torch.full((B, max_len), pad_id,  dtype=torch.long)
-    attn_mask  = torch.zeros(B, max_len,            dtype=torch.long)
-    labels_out = torch.full((B, max_len), -100,     dtype=torch.long)
-
-    for i, (ids, labs) in enumerate(zip(input_ids_list, labels_list)):
+    B = len(toks)
+    max_len = max(len(ids) for ids, _ in toks)
+    input_ids  = torch.full((B, max_len), pad_id, dtype=torch.long)
+    attn_mask  = torch.zeros(B, max_len,          dtype=torch.long)
+    labels_out = torch.full((B, max_len), -100,   dtype=torch.long)
+    for i, (ids, labs) in enumerate(toks):
         L = len(ids)
         input_ids [i, :L] = torch.tensor(ids,  dtype=torch.long)
         attn_mask [i, :L] = 1
         labels_out[i, :L] = torch.tensor(labs, dtype=torch.long)
 
+    fens      = [s[KEY_FEN] for s in std]
+    histories = [s[KEY_HISTORY] or None for s in std]
     return {
         "input_ids":      input_ids,
         "attention_mask": attn_mask,
         "labels":         labels_out,
-        "start_fens":     [x["start_fen"]    for x in batch],
-        "moves":          [x["moves"]         for x in batch],
-        "fens":           [x["fen"]           for x in batch],
-        "question_types": [x["question_type"] for x in batch],
-        "answer_classes": [x["answer_class"]  for x in batch],
+        "planes":         encode_fen_batch(fens, histories),
+        "extra":          [s[KEY_EXTRA] for s in std],
     }
 
 
@@ -289,7 +270,6 @@ def init_datasets_and_dataloader(args, tokenizer):
     cfn = functools.partial(
         collate_fn,
         tokenizer=tokenizer,
-        system_prompt=SYSTEM_PROMPT,
         max_seq_len=args.max_seq_len,
     )
     train_loader = DataLoader(
