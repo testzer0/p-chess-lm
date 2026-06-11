@@ -1,32 +1,29 @@
 #!/usr/bin/env bash
 # Historical record of Experiment 1 (Stage 1 architecture comparison).
 # NOT intended for rerunning. Results in chesslm/runs/stage1_*/; analysis in chesslm/exp1.md.
+# The two kv_proj variants (orig array idx 2-5) were dropped when the arch was retired.
 #
 # Two sub-sweeps were submitted as separate SLURM array jobs:
 #
-#   Baseline (array=0-7):  lr=1e-4, constant schedule, --time=36:00:00
-#   High-LR  (array=0-7):  lr=2e-4, cosine schedule,  --time=24:00:00, exp_name += _hilr
+#   Baseline (array=0-3):  lr=1e-4, constant schedule, --time=36:00:00
+#   High-LR  (array=0-3):  lr=2e-4, cosine schedule,  --time=24:00:00, exp_name += _hilr
 #
 # Array layout (arch_idx * 2 + dataset_idx):
-#   0  flamingo              v2.1
-#   1  flamingo              v3
-#   2  kv_proj/channel_concat  v2.1
-#   3  kv_proj/channel_concat  v3
-#   4  kv_proj/interleaved   v2.1
-#   5  kv_proj/interleaved   v3
-#   6  llava                 v2.1
-#   7  llava                 v3
+#   0  flamingo  v2.1
+#   1  flamingo  v3
+#   2  llava     v2.1
+#   3  llava     v3
 
 # ── Baseline job ────────────────────────────────────────────────────────────
 # #SBATCH --job-name=chesslm-s1
 # #SBATCH --time=36:00:00
-# #SBATCH --array=0-7
+# #SBATCH --array=0-3
 # #SBATCH --output=chesslm/logs/array_%A_%a.out
 
 # ── High-LR job ─────────────────────────────────────────────────────────────
 # #SBATCH --job-name=chesslm-s1-hilr
 # #SBATCH --time=24:00:00
-# #SBATCH --array=0-7
+# #SBATCH --array=0-3
 # #SBATCH --output=chesslm/logs/array_hilr_%A_%a.out
 
 # ── Shared SBATCH options (both jobs) ───────────────────────────────────────
@@ -60,18 +57,6 @@ case "$ARCH_IDX" in
         EXP_TAG="flamingo"
         ;;
     1)
-        ARCH="kv_proj"
-        LORA_RANK=16
-        ARCH_EXTRA_ARGS="--proj-mode channel_concat"
-        EXP_TAG="kv_proj_channel_concat"
-        ;;
-    2)
-        ARCH="kv_proj"
-        LORA_RANK=16
-        ARCH_EXTRA_ARGS="--proj-mode interleaved"
-        EXP_TAG="kv_proj_interleaved"
-        ;;
-    3)
         ARCH="llava"
         LORA_RANK=16
         ARCH_EXTRA_ARGS=""
@@ -83,7 +68,7 @@ esac
 # High-LR:  LR=2e-4 cosine,   _hilr suffix, --lr 2e-4 --scheduler cosine appended.
 EXP_NAME="stage1_${EXP_TAG}_${DATASET_VERSION}${HILR_SUFFIX:-}"
 
-python -m chesslm.train \
+python -m train \
     --arch              "$ARCH" \
     --lora-rank         "$LORA_RANK" \
     ${ARCH_EXTRA_ARGS} \

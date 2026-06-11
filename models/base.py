@@ -2,6 +2,8 @@ from typing import Iterator, Protocol
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+from transformers import PretrainedConfig, PreTrainedModel
 
 
 class ChessLM(Protocol):
@@ -21,6 +23,67 @@ class ChessLM(Protocol):
     def get_diagnostics(self) -> dict[str, float]: ...
 
     def param_groups(self, lr: float, decoder_lr: float | None = None) -> list[dict]: ...
+
+
+# ---------------------------------------------------------------------------
+# FSDP-ready base class + in-class chunked loss
+#
+# Shared base for the flamingo / llava archs. Subclassing
+# PreTrainedModel is the minimal FSDP hook: exposes `_no_split_modules` for the
+# auto-wrap policy and gives the model a `config`. HF weight-init is unused (the
+# decoder is pretrained, bridges self-init), so `_init_weights` is a no-op.
+# `_loss_from_hidden` streams the LM head in chunks so the full (B, S, V) logits
+# are never materialized; `forward` calls it when `labels` is given.
+# ---------------------------------------------------------------------------
+
+class ChessLMConfig(PretrainedConfig):
+    model_type = "chess_lm"
+
+
+class ChessLMPreTrainedModel(PreTrainedModel):
+    config_class = ChessLMConfig
+    base_model_prefix = "chess_lm"
+    supports_gradient_checkpointing = True
+    # DenseXAttn exists only in the flamingo arch; harmless for the others.
+    _no_split_modules = ["SmolLM3DecoderLayer", "DenseXAttn"]
+    logit_chunk_size = 1024  # supervised tokens per LM-head chunk
+
+    def _init_weights(self, module):
+        return  # decoder is pretrained; bridges init in __init__
+
+    def _loss_from_hidden(
+        self,
+        hidden: torch.Tensor,
+        labels: torch.Tensor,
+        chunk_size: int | None = None,
+    ) -> torch.Tensor:
+        """Chunked next-token cross-entropy from final hidden states (B, S, D).
+
+        Mean over supervised positions (labels != -100), matching a shifted
+        cross_entropy(ignore_index=-100), without building the full logits.
+        """
+        chunk = chunk_size or self.logit_chunk_size
+        base = self._base_decoder
+
+        # Shift, then keep only supervised positions: run the LM head on exactly
+        # the tokens that contribute to the loss.
+        hidden = hidden[:, :-1, :].reshape(-1, hidden.size(-1))
+        labels = labels[:, 1:].reshape(-1)
+        keep = labels != -100
+        hidden = hidden[keep]
+        labels = labels[keep]
+        n = labels.numel()
+        if n == 0:
+            return hidden.sum() * 0.0  # degenerate batch: keep a grad-connected 0
+
+        total = hidden.new_zeros((), dtype=torch.float32)
+        for i in range(0, n, chunk):
+            h_c = hidden[i:i + chunk]
+            logits_c = base.lm_head(h_c)
+            if self.n_new_tokens > 0:
+                logits_c = torch.cat([logits_c, self.new_lm_head(h_c)], dim=-1)
+            total = total + F.cross_entropy(logits_c.float(), labels[i:i + chunk], reduction="sum")
+        return total / n
 
 
 def init_new_token_embeddings(

@@ -13,5 +13,13 @@ __pycache__/
 *.npy
 *.pkl
 
-/plans
-/data
+# Training run directories
+runs_dryrun/
+.runpkg/
+
+# HuggingFace datasets (binary arrow files)
+*.arrow
+data/
+
+# Claude Plans
+plans/

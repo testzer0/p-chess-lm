@@ -1,7 +1,9 @@
 import torch
 import torch.nn as nn
 
-from chesslm.models.base import (
+from models.base import (
+    ChessLMConfig,
+    ChessLMPreTrainedModel,
     apply_lora,
     decoder_trainable_params,
     init_new_token_embeddings,
@@ -11,7 +13,7 @@ from chesslm.models.base import (
 )
 
 
-class LLaVAChessLM(nn.Module):
+class LLaVAChessLM(ChessLMPreTrainedModel):
     """
     Frozen LC0 encoder + SmolLM3 3B decoder bridged via a LLaVA-style MLP connector.
 
@@ -47,7 +49,7 @@ class LLaVAChessLM(nn.Module):
     N_RANKS       = 8
 
     def __init__(self, decoder: nn.Module, n_new_tokens: int = 0, lora_rank: int = 0):
-        super().__init__()
+        super().__init__(ChessLMConfig())
 
         self.lora_rank = lora_rank
         self.decoder = apply_lora(decoder, lora_rank)
@@ -80,6 +82,7 @@ class LLaVAChessLM(nn.Module):
         encoder_hidden_states: torch.Tensor,
         attention_mask: torch.Tensor = None,
         position_ids: torch.Tensor = None,
+        labels: torch.Tensor = None,
     ) -> torch.Tensor:
         B, S = input_ids.shape
         device = input_ids.device
@@ -137,6 +140,8 @@ class LLaVAChessLM(nn.Module):
         )
         h_out = model_out.last_hidden_state[:, self.N_ENC_SQUARES:, :]  # (B, S, 2048)
 
+        if labels is not None:
+            return self._loss_from_hidden(h_out, labels)
         logits = base.lm_head(h_out)
         if self.n_new_tokens > 0:
             logits = torch.cat([logits, self.new_lm_head(h_out)], dim=-1)

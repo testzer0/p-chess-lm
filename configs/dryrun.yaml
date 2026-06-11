@@ -1,0 +1,43 @@
+# Dryrun config for the FSDP chess-LM trainer.
+#   Launch:  sbatch scripts/dryrun.sbatch
+# Keys use underscore names matching train.py's args and override its defaults.
+
+# --- model ---
+arch: flamingo
+lora_rank: -1            # frozen decoder; train only the cross-attention bridge
+dtype: bfloat16
+decoder_path: /scratch/gpfs/DANQIC/ab4197/mydata/p-chess-lm/models/SmolLM3-3B-stage1-step-3440000
+encoder_path: /scratch/gpfs/DANQIC/ab4197/mydata/p-chess-lm/data/engines/lc0_hf_bt5
+
+# --- special tokens: OFF for the dryrun (we are only exercising the pipeline) ---
+# NOTE: this decoder is base-vocab (128256); the data's SQUARE_*/PIECE_* tokens
+# are not in its tokenizer, so they tokenize as subwords here. For a faithful
+# run set add_special_tokens: true (adds them + trains embeddings) or point
+# decoder_path at a model already resized to the chess vocab (128340).
+add_special_tokens: false
+
+# --- data (the dryrun fixture: 3000 train / 100 eval) ---
+train_dataset: /scratch/gpfs/DANQIC/ab4197/mydata/p-chess-lm/lab/merged_code/data/stagewise/stage1_dryrun/train
+eval_dataset:  /scratch/gpfs/DANQIC/ab4197/mydata/p-chess-lm/lab/merged_code/data/stagewise/stage1_dryrun/eval
+num_workers: 2
+
+# --- training (small, for a quick smoke) ---
+batch_size: 8
+grad_accum_steps: 1
+max_seq_len: 256
+n_steps: 50
+lr: 1.0e-4
+scheduler: constant
+warmup_ratio: 0.0
+max_grad_norm: 1.0
+
+# --- eval / checkpoint ---
+eval_freq: 25
+eval_batch_size: 8
+eval_max_new_tokens: 64
+eval_max_examples: 100
+log_samples: 4
+
+# --- output ---
+exp_name: dryrun
+output_dir: /scratch/gpfs/DANQIC/ab4197/mydata/p-chess-lm/lab/merged_code/runs_dryrun
