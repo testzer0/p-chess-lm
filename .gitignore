@@ -16,6 +16,8 @@ __pycache__/
 # Training run directories
 chesslm/runs/
 chesslm/runs_dryrun/
+runs_dryrun/
+.runpkg/
 chesslm/encoder/
 hanoi/checkpoints/
 chesslm/smoke_tests/probe_exps/probe_outputs/
@@ -23,6 +25,7 @@ chesslm/smoke_tests/probe_exps/probe_outputs/
 # HuggingFace datasets (binary arrow files)
 *.arrow
 chesslm/datasets/
+data/
 
 # Raw data files
 chesslm/raw_data/

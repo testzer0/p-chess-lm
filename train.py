@@ -20,12 +20,34 @@ from chesslm.utils.utils import encode_planes
 # Checkpointing
 # ---------------------------------------------------------------------------
 
-def save_checkpoint(accelerator, run_dir: Path, step: int) -> Path:
-    # accelerator.save_state writes the FSDP-sharded model + optimizer +
-    # scheduler + RNG; the step goes in a small sidecar (Step 4 adds the data
-    # sampler state here too).
+def save_trainable(accelerator, model, out_path: Path) -> None:
+    # Small, portable artifact: just the trainable parameters (the bridge + new
+    # embeddings, plus the decoder when it is unfrozen), gathered to full tensors
+    # on the main process. The sharded save_state is for resuming training; this
+    # is what you load for inference / eval elsewhere. full_tensor() is an
+    # all-gather, so every rank walks the same params; only rank 0 keeps them.
+    raw = accelerator.unwrap_model(model)
+    sd = {}
+    for name, p in raw.named_parameters():
+        if not p.requires_grad:
+            continue
+        t = p.data
+        if hasattr(t, "full_tensor"):  # FSDP2 shards each param as a DTensor
+            t = t.full_tensor()
+        if accelerator.is_main_process:
+            sd[name] = t.detach().to("cpu")
+    if accelerator.is_main_process:
+        torch.save(sd, out_path)
+    accelerator.wait_for_everyone()
+
+
+def save_checkpoint(accelerator, model, run_dir: Path, step: int) -> Path:
+    # save_state: FSDP-sharded model + optimizer + scheduler + RNG + dataloader
+    # position, for exact resume. save_trainable: the small portable trainable-
+    # only state. The step lives in a sidecar.
     ckpt_dir = run_dir / f"step_{step:07d}"
     accelerator.save_state(str(ckpt_dir))
+    save_trainable(accelerator, model, ckpt_dir / "trainable.pt")
     if accelerator.is_main_process:
         (ckpt_dir / "train_state.json").write_text(json.dumps({"step": step}))
         print(f"[step {step}] checkpoint saved → {ckpt_dir}")
@@ -65,7 +87,9 @@ def save_generations(ckpt_dir: Path, samples: list[dict]) -> None:
 # ---------------------------------------------------------------------------
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Train FlamingoChessLM Stage 1")
+    parser = argparse.ArgumentParser(description="Train a chess-LM (config-driven)")
+    parser.add_argument("--config", default=None,
+                        help="YAML config; its keys (underscore names) override the defaults below")
 
     # --- reproducibility ---
     g = parser.add_argument_group("reproducibility")
@@ -85,7 +109,6 @@ def parse_args():
     # --- optimizer / scheduler ---
     g = parser.add_argument_group("optimizer")
     g.add_argument("--weight-decay",  type=float, default=0.01)
-    g.add_argument("--embed-init",    choices=["semantic", "random"], default="semantic")
     g.add_argument("--scheduler",     choices=["constant", "cosine", "linear"], default="constant")
     g.add_argument("--warmup-ratio",  type=float, default=0.05,
                    help="Fraction of n_steps used for linear warmup (cosine/linear schedulers only)")
@@ -109,8 +132,8 @@ def parse_args():
     g.add_argument("--arch",      choices=["flamingo", "llava"], default="flamingo")
     g.add_argument("--lora-rank", type=int, default=-1,
                    help="LoRA rank: <0 = frozen decoder, 0 = full fine-tuning, >0 = LoRA adapters")
-    g.add_argument("--decoder-path", required=True)
-    g.add_argument("--encoder-path", required=True)
+    g.add_argument("--decoder-path", default=None)
+    g.add_argument("--encoder-path", default=None)
     g.add_argument("--alpha-init",    type=float, default=0.0,
                    help="Initial alpha value (pre-tanh). 0.0=Flamingo original (default), 0.5493=atanh(0.5)")
     g.add_argument("--wo-zero-init",  action="store_true",
@@ -121,19 +144,36 @@ def parse_args():
     g.add_argument("--compile",      action="store_true", default=False,
                    help="torch.compile the model (faster steady-state, ~2min cold-start)")
 
+    # --- special tokens (optional; off by default — the tokenizer is expected to
+    #     already contain the chess answer tokens) ---
+    g = parser.add_argument_group("special tokens")
+    g.add_argument("--add-special-tokens", action="store_true", default=False,
+                   help="Add the POV chess answer tokens to the tokenizer + train new embeddings for them")
+    g.add_argument("--embed-init", choices=["semantic", "random"], default="semantic",
+                   help="Init for added token embeddings (only with --add-special-tokens)")
+
     # --- data ---
     g = parser.add_argument_group("data")
-    g.add_argument("--train-dataset", required=True, help="Path to HF Arrow train dataset dir")
-    g.add_argument("--eval-dataset",  required=True, help="Path to HF Arrow eval dataset dir")
+    g.add_argument("--train-dataset", default=None, help="Path to HF Arrow train dataset dir")
+    g.add_argument("--eval-dataset",  default=None, help="Path to HF Arrow eval dataset dir")
     g.add_argument("--num-workers",   type=int, default=4)
 
     # --- output ---
     g = parser.add_argument_group("output")
-    g.add_argument("--exp-name",    required=True, help="Experiment name; outputs go to runs/{exp_name}/")
+    g.add_argument("--exp-name",    default=None, help="Experiment name; outputs go to runs/{exp_name}/")
     g.add_argument("--output-dir",  default="chesslm/runs/")
-    g.add_argument("--resume-from", default=None, help="Path to checkpoint.pt to resume from")
+    g.add_argument("--resume-from", default=None, help="Path to a checkpoint dir to resume from")
 
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.config:
+        import yaml
+        for k, v in (yaml.safe_load(open(args.config)) or {}).items():
+            setattr(args, k, v)
+    missing = [k for k in ("decoder_path", "encoder_path", "train_dataset", "eval_dataset", "exp_name")
+               if getattr(args, k, None) is None]
+    if missing:
+        parser.error("missing required key(s) (set via --config or CLI): " + ", ".join(missing))
+    return args
 
 
 def get_diagnostics(model) -> dict[str, float]:
@@ -184,11 +224,8 @@ def main():
     txt_path   = run_dir / "metrics.txt"
 
     t0 = time.time()
-    (model, encoder, tokenizer,
-     train_loader, eval_ds,
-     optimizer, scheduler,
-     amp_dtype, special_token_ids, id_to_special,
-     dataset_cfg) = initialize_training_objects(args)
+    (model, encoder, tokenizer, train_loader, eval_ds,
+     optimizer, scheduler, amp_dtype) = initialize_training_objects(args)
 
     # Shard the model + optimizer + scheduler + dataloader across ranks. The
     # frozen encoder is not trained, so it stays replicated (not prepared).
@@ -290,7 +327,7 @@ def main():
 
             if global_step % args.eval_freq == 0:
                 do_eval(global_step, jsonl_file, txt_file, train_loss=running_loss)
-                save_checkpoint(accelerator, run_dir, global_step)
+                save_checkpoint(accelerator, model, run_dir, global_step)
 
             running_loss = 0.0
             if global_step >= args.n_steps:
