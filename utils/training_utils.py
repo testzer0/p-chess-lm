@@ -123,12 +123,15 @@ def init_model_and_tokenizer(args):
     maybe_init_special_token_embeddings(model, tokenizer, args)  # no-op unless flag set
 
     model.train()
+    # Keep trainable params in fp32 (master weights). Two reasons: (1) the alpha
+    # gates need fp32 — per-step updates (~1e-6) would round to zero against bf16
+    # precision; (2) FSDP2 asserts uniform dtype within each wrapped unit, so the
+    # trainable bridge must be all-fp32 while the frozen decoder stays all-bf16
+    # (they are separate wrap units). Compute is still bf16 via autocast.
+    for p in model.parameters():
+        if p.requires_grad:
+            p.data = p.data.float()
     if arch == "flamingo":
-        # Alpha gates stay fp32 even in a bf16 run: per-step updates (~1e-6) would
-        # round to zero against bf16's ~0.004 precision near 0.55.
-        for layer in model.x_attn_layers:
-            layer.alpha_attn.data = layer.alpha_attn.data.float()
-            layer.alpha_ffn.data  = layer.alpha_ffn.data.float()
         model.x_attn_layers.train()
     # Keep the decoder in eval mode when fully frozen (lora_rank < 0).
     if model.lora_rank < 0:

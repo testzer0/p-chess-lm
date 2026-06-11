@@ -168,9 +168,33 @@ def encode_planes(encoder, planes: torch.Tensor, dtype: torch.dtype) -> torch.Te
     """Run the lc0 encoder on pre-built planes -> hidden states (B, 16, 64, 1024).
 
     The planes come from our lc0_planes builder and are already POV-relative
-    (oriented to the side to move), so no post-hoc flip is needed — this matches
-    encode_positions(pov=True). The encoder is frozen, so it runs under no_grad.
+    (oriented to the side to move), so no post-hoc flip is needed. The encoder is
+    frozen, so it runs under no_grad.
+
+    Two encoder interfaces are supported. Our lc0 (src/lc0_torch) returns only
+    last_hidden_state, so we capture each layer by wrapping ``_forward_encoder``
+    (the input-embedding output + the 15 encoder-layer outputs = 16 states, same
+    convention as chess_lm_base). An encoder that natively exposes per-layer
+    states via ``output_hidden_states`` is used directly.
     """
     with torch.no_grad():
+        if hasattr(encoder, "_forward_encoder"):
+            captured: list[torch.Tensor] = []
+            orig = encoder._forward_encoder
+
+            def wrapped(x, layer):
+                if not captured:
+                    captured.append(x)          # input-embedding output (state 0)
+                out = orig(x, layer)
+                captured.append(out)            # encoder-layer outputs (states 1..15)
+                return out
+
+            encoder._forward_encoder = wrapped
+            try:
+                encoder(input_planes=planes, return_dict=True)
+            finally:
+                del encoder._forward_encoder    # restore the bound method
+            return torch.stack(captured, dim=1).to(dtype)
+
         out = encoder(planes, output_hidden_states=True)
         return torch.stack(out.all_hidden_states, dim=1).to(dtype)

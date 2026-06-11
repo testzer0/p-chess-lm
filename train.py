@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 
 import torch
-from accelerate import Accelerator, FullyShardedDataParallelPlugin
+from accelerate import Accelerator, FullyShardedDataParallelPlugin, skip_first_batches
 from accelerate.utils import DataLoaderConfiguration
 
 from chesslm.utils.training_utils import initialize_training_objects, post_eval
@@ -206,7 +206,7 @@ def main():
     )
     accelerator = Accelerator(
         gradient_accumulation_steps=args.grad_accum_steps,
-        dataloader_config=DataLoaderConfiguration(use_stateful_dataloader=True),
+        dataloader_config=DataLoaderConfiguration(use_seedable_sampler=True),
         fsdp_plugin=fsdp_plugin,
     )
     device = accelerator.device
@@ -277,12 +277,14 @@ def main():
     if args.eval_at_start:
         do_eval(start_step, jsonl_file, txt_file)
 
-    # Deterministic resumption is handled by the stateful dataloader: its
-    # iteration state is saved/restored by accelerator.save_state/load_state, so
-    # a resumed run continues mid-epoch from exactly where it stopped — no manual
-    # epoch/offset bookkeeping. The while-loop just starts a fresh epoch each
-    # time the loader is exhausted (the stateful loader reshuffles + tracks it).
+    # Deterministic resumption: with a seedable sampler, set_epoch(epoch) gives a
+    # reproducible shuffle, so re-deriving (epoch, in-epoch offset) from the step
+    # and skip_first_batches over the partial epoch replays the exact same data.
+    batches_per_epoch = len(train_loader)
     global_step = start_step
+    batches_done = start_step * args.grad_accum_steps
+    epoch = batches_done // batches_per_epoch
+    skip_batches = batches_done % batches_per_epoch
 
     optimizer.zero_grad()
     accelerator.print(
@@ -299,7 +301,12 @@ def main():
     running_loss = 0.0
     done = global_step >= args.n_steps
     while not done:
-        for batch in train_loader:
+        train_loader.set_epoch(epoch)
+        epoch_iter = train_loader
+        if skip_batches:
+            epoch_iter = skip_first_batches(train_loader, skip_batches)
+            skip_batches = 0
+        for batch in epoch_iter:
             # accelerate gates grad sync + optimizer step over grad_accum_steps.
             with accelerator.accumulate(model):
                 enc_hidden = encode_planes(encoder, batch["planes"], amp_dtype)
@@ -333,6 +340,7 @@ def main():
             if global_step >= args.n_steps:
                 done = True
                 break
+        epoch += 1
 
     if accelerator.is_main_process:
         if jsonl_file is not None:
