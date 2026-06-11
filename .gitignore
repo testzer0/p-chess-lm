@@ -15,6 +15,7 @@ __pycache__/
 
 # Training run directories
 runs_dryrun/
+runs/
 .runpkg/
 
 # HuggingFace datasets (binary arrow files)
@@ -23,3 +24,7 @@ data/
 
 # Claude Plans
 plans/
+experiments/
+
+# Hanoi
+hanoi/
