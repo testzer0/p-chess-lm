@@ -1,19 +1,24 @@
-"""Generative evaluation: exact-match on the final answer (text after the last
-blank line) of the model generation vs the gold ``response``.
+"""Generative evaluation: per-task grading on the final answer of each row.
 
-The grade is format-agnostic — we never parse the answer into special tokens;
-we just take everything after the final ``\\n\\n`` in both the gold response and
-the generation, strip it, and compare the strings. Whatever token convention the
-data uses (``<SQUARE_E4>`` or ``SQUARE_E4`` ...), gold and generation share it,
-so exact string match is correct.
+Each gold ``response`` is structured as ``{prose-with-tokens}\\n\\n{answer-tokens}``.
+We split on the last ``\\n\\n`` to isolate the trailing answer segment, then
+dispatch to a per-task grader. The default is multiset (Counter) equality on
+the special tokens parsed from the answer segment — order-free, but repetitions
+are significant (so ``<PIECE_WB><PIECE_WB>`` ⇒ two white bishops grades
+correctly for piece-counting tasks). Tasks whose gold answer is a prose count
+expression (``material_count``, ``piece_count``) use an exact-string grader
+instead. New tasks can register their own grader in ``_GRADERS`` without
+touching the dispatcher.
 """
 import os
-from collections import defaultdict
+import re
+from collections import Counter, defaultdict
+from typing import Callable
 
 import torch
 from torch.utils.data import DataLoader
 
-from chesslm.utils.instance_format import (
+from utils.instance_format import (
     KEY_EXTRA,
     KEY_FEN,
     KEY_HISTORY,
@@ -22,13 +27,40 @@ from chesslm.utils.instance_format import (
     ensure_chat_template,
     to_standard_instance,
 )
-from chesslm.utils.lc0_planes import encode_fen_batch
-from chesslm.utils.utils import encode_planes
+from utils.lc0_planes import encode_fen_batch
+from utils.utils import encode_planes, turn_tensor
 
 
 def _final_answer(text: str) -> str:
     """Everything after the last blank line, stripped (the gold/predicted answer)."""
     return text.rsplit("\n\n", 1)[-1].strip()
+
+
+# ---------------------------------------------------------------------------
+# Grader registry. Default = multiset (Counter) equality on the special tokens
+# extracted from each answer segment; tasks listed in _GRADERS override.
+# ---------------------------------------------------------------------------
+
+_TOKEN_RE = re.compile(r"<(?:SQUARE|PIECE)_[A-Z0-9]+>|<EMPTY>")
+
+
+def _multiset_grade(pred: str, gold: str) -> bool:
+    return Counter(_TOKEN_RE.findall(pred)) == Counter(_TOKEN_RE.findall(gold))
+
+
+def _exact_grade(pred: str, gold: str) -> bool:
+    return pred.strip() == gold.strip()
+
+
+_DEFAULT_GRADER: Callable[[str, str], bool] = _multiset_grade
+_GRADERS: dict[str, Callable[[str, str], bool]] = {
+    "material_count": _exact_grade,
+    "piece_count":    _exact_grade,
+}
+
+
+def _grade(task: str, pred: str, gold: str) -> bool:
+    return _GRADERS.get(task, _DEFAULT_GRADER)(pred, gold)
 
 
 # ---------------------------------------------------------------------------
@@ -147,6 +179,8 @@ def run_eval(
     amp_dtype: torch.dtype,
     eval_batch_size: int,
     eval_max_new_tokens: int,
+    *,
+    pov: bool,
     temperature: float = 0.0,
     top_k: int = 20,
     top_p: float = 0.95,
@@ -154,8 +188,9 @@ def run_eval(
 ) -> tuple[dict[str, float], list[dict]]:
     """Run generative eval over the eval dataset (or a capped subset).
 
-    Grades by exact match of the final answer (text after the last blank line)
-    between the gold ``response`` and the generation, per ``extra.task``.
+    Grades the final answer (text after the last blank line) per ``extra.task``
+    using the per-task grader registry (multiset match on parsed special
+    tokens by default; exact string match for prose-count tasks).
     Returns (metrics, samples) where samples contains every evaluated example.
     """
     model.eval()
@@ -202,7 +237,10 @@ def run_eval(
             for p in prompts
         ]
 
-        enc_hidden = encode_planes(encoder, encode_fen_batch(fens, histories).to(device), amp_dtype)
+        enc_hidden = encode_planes(
+            encoder, encode_fen_batch(fens, histories).to(device), amp_dtype,
+            pov=pov, turn=turn_tensor(fens),
+        )
 
         gen_ids_list = _batched_decode(
             model, enc_hidden, prompt_ids_list,
@@ -215,7 +253,7 @@ def run_eval(
                 gen_ids = gen_ids[:-1]                       # drop the stop token
             generated_text = tokenizer.decode(gen_ids, skip_special_tokens=False)
             pred    = _final_answer(generated_text)
-            correct = pred == golds[i]
+            correct = _grade(tasks[i], pred, golds[i])
 
             stats[tasks[i]]["total"]   += 1
             stats[tasks[i]]["correct"] += int(correct)

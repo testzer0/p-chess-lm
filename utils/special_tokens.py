@@ -1,8 +1,8 @@
 """Optional chess special-token support (all the token-adding machinery).
 
 The repo's chess tokenizers already contain the answer tokens the data uses, so
-by default the trainer adds nothing (n_new_tokens=0). When a tokenizer lacks
-them, set ``add_special_tokens: true`` in the config:
+the runtime add path is gated by ``args.add_special_tokens``. When a tokenizer
+lacks them, set ``add_special_tokens: true`` in the config:
 
   * maybe_add_special_tokens     — adds the answer-token set to the tokenizer
                                    *before* the model is built (so n_new_tokens
@@ -10,20 +10,26 @@ them, set ``add_special_tokens: true`` in the config:
   * maybe_init_special_token_embeddings — semantically initializes the new
                                    embeddings *after* the model is built.
 
-Both are no-ops when the flag is off.
+Which token set is added (POV vs board-absolute) is selected by ``args.pov``,
+which the trainer sources from the dataset's ``dataset_config.json``. Both
+functions are no-ops when ``args.add_special_tokens`` is false.
 """
 import chess
 import torch
 
-from chesslm.models.base import unwrap_decoder
-from chesslm.utils.utils import (
-    POV_ANSWER_SPECIAL_TOKENS,
+from models.base import unwrap_decoder
+from utils.utils import (
+    ANSWER_SPECIAL_TOKENS,
     EMPTY_TOKEN,
+    POV_ANSWER_SPECIAL_TOKENS,
     POV_SQUARE_TOKENS,
+    SQUARE_TOKENS,
+    _PIECE_TO_POV_TOKEN,
     _PIECE_TO_TOKEN,
 )
 
 _COLOR_WORDS = {chess.WHITE: "white", chess.BLACK: "black"}
+_POV_SIDE_WORDS = {True: "mine", False: "opp"}
 _PIECE_WORDS = {
     chess.PAWN: "pawn", chess.KNIGHT: "knight", chess.BISHOP: "bishop",
     chess.ROOK: "rook", chess.QUEEN: "queen", chess.KING: "king",
@@ -31,15 +37,17 @@ _PIECE_WORDS = {
 
 
 def maybe_add_special_tokens(tokenizer, args) -> int:
-    """Add the POV chess answer tokens to ``tokenizer`` iff ``args.add_special_tokens``.
+    """Add the chess answer-token set matching ``args.pov`` to ``tokenizer``,
+    iff ``args.add_special_tokens``.
 
     Returns the number of tokens added (0 when the flag is off). Call this BEFORE
     building the model so the model can size its new-token embeddings.
     """
-    if not getattr(args, "add_special_tokens", False):
+    if not args.add_special_tokens:
         return 0
+    tok_set = POV_ANSWER_SPECIAL_TOKENS if args.pov else ANSWER_SPECIAL_TOKENS
     before = len(tokenizer)
-    tokenizer.add_tokens(POV_ANSWER_SPECIAL_TOKENS, special_tokens=True)
+    tokenizer.add_tokens(tok_set, special_tokens=True)
     return len(tokenizer) - before
 
 
@@ -54,13 +62,21 @@ def maybe_init_special_token_embeddings(model, tokenizer, args) -> None:
     No-op when the flag is off, no tokens were added, or embed_init='random'.
     Reads from the frozen pretrained embeddings; never modifies them.
 
-    semantic init:
-      POV SQUARE tokens ← mean(file_char, rank_char) of board square i (POV index
-        i maps to board square i, the white-POV correspondence)
-      piece tokens      ← mean(color_word, piece_word)
+    semantic init (POV mode, args.pov=True):
+      POV SQUARE tokens ← mean(file_char, rank_char) of board square i (POV
+        index i maps to board square i, the white-POV correspondence — not
+        strictly meaningful for black-to-move but adequate as initialization)
+      POV piece tokens  ← mean(side_word, piece_word) where side_word ∈
+        {"mine", "opp"}
+      EMPTY token       ← embedding of 'empty'
+
+    semantic init (absolute mode, args.pov=False):
+      SQUARE tokens     ← mean(file_char, rank_char) of the literal board sq
+      piece tokens      ← mean(color_word, piece_word) with color ∈
+        {"white", "black"}
       EMPTY token       ← embedding of 'empty'
     """
-    if (not getattr(args, "add_special_tokens", False)
+    if (not args.add_special_tokens
             or model.n_new_tokens == 0
             or getattr(args, "embed_init", "semantic") == "random"):
         return
@@ -78,13 +94,21 @@ def maybe_init_special_token_embeddings(model, tokenizer, args) -> None:
             + _mean_embedding(frozen_w, tokenizer, name[1])
         ) / 2.0
 
-    for i, tok in enumerate(POV_SQUARE_TOKENS):
+    # chess.WHITE == True and chess.BLACK == False, so _PIECE_TO_POV_TOKEN's
+    # (is_mine, ptype) keys and _PIECE_TO_TOKEN's (color, ptype) keys share
+    # the same shape — same for _POV_SIDE_WORDS vs _COLOR_WORDS. One loop body
+    # handles both modes after selecting the matching trio.
+    sq_tokens, piece_map, side_words = (
+        (POV_SQUARE_TOKENS, _PIECE_TO_POV_TOKEN, _POV_SIDE_WORDS) if args.pov
+        else (SQUARE_TOKENS, _PIECE_TO_TOKEN, _COLOR_WORDS)
+    )
+    for sq, tok in zip(chess.SQUARES, sq_tokens):
         idx = tokenizer.convert_tokens_to_ids(tok) - frozen_vocab
-        new_emb_w[idx] = sq_semantic[i].to(new_emb_w.dtype)
+        new_emb_w[idx] = sq_semantic[sq].to(new_emb_w.dtype)
 
-    for (color, ptype), tok in _PIECE_TO_TOKEN.items():
+    for (side_key, ptype), tok in piece_map.items():
         avg = (
-            _mean_embedding(frozen_w, tokenizer, _COLOR_WORDS[color])
+            _mean_embedding(frozen_w, tokenizer, side_words[side_key])
             + _mean_embedding(frozen_w, tokenizer, _PIECE_WORDS[ptype])
         ) / 2.0
         idx = tokenizer.convert_tokens_to_ids(tok) - frozen_vocab

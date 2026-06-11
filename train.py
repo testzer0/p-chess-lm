@@ -11,9 +11,9 @@ import torch
 from accelerate import Accelerator, FullyShardedDataParallelPlugin, skip_first_batches
 from accelerate.utils import DataLoaderConfiguration
 
-from chesslm.utils.training_utils import initialize_training_objects, post_eval
-from chesslm.utils.eval_utils import run_eval
-from chesslm.utils.utils import encode_planes
+from utils.training_utils import initialize_training_objects, post_eval
+from utils.eval_utils import run_eval
+from utils.utils import encode_planes
 
 
 # ---------------------------------------------------------------------------
@@ -254,6 +254,7 @@ def main():
         metrics, samples = run_eval(
             model, encoder, eval_ds, tokenizer, device, amp_dtype,
             args.eval_batch_size, args.eval_max_new_tokens,
+            pov=args.pov,
             temperature=args.temperature, top_k=args.top_k, top_p=args.top_p,
             max_examples=args.eval_max_examples,
         )
@@ -309,7 +310,10 @@ def main():
         for batch in epoch_iter:
             # accelerate gates grad sync + optimizer step over grad_accum_steps.
             with accelerator.accumulate(model):
-                enc_hidden = encode_planes(encoder, batch["planes"], amp_dtype)
+                enc_hidden = encode_planes(
+                    encoder, batch["planes"], amp_dtype,
+                    pov=args.pov, turn=batch["turn"],
+                )
                 with torch.autocast(device_type=device.type, dtype=amp_dtype):
                     loss = model(batch["input_ids"], enc_hidden,
                                  batch["attention_mask"], labels=batch["labels"])

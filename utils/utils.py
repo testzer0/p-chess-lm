@@ -17,12 +17,20 @@ SQUARE_TOKENS: list[str] = [
 # For black to move: SQUARE_i corresponds to board square i^56 (a8=1, b8=2, …)
 POV_SQUARE_TOKENS: list[str] = [f"<SQUARE_{i + 1}>" for i in range(64)]
 
-# <PIECE_WP> … <PIECE_BK>  (12 tokens)
+# <PIECE_WP> … <PIECE_BK>  (12 tokens, board-absolute)
 PIECE_TOKENS: list[str] = [
     "<PIECE_WP>", "<PIECE_WN>", "<PIECE_WB>",
     "<PIECE_WR>", "<PIECE_WQ>", "<PIECE_WK>",
     "<PIECE_BP>", "<PIECE_BN>", "<PIECE_BB>",
     "<PIECE_BR>", "<PIECE_BQ>", "<PIECE_BK>",
+]
+
+# <PIECE_MP> … <PIECE_OK>  (12 POV-relative tokens, mine = side-to-move)
+POV_PIECE_TOKENS: list[str] = [
+    "<PIECE_MP>", "<PIECE_MN>", "<PIECE_MB>",
+    "<PIECE_MR>", "<PIECE_MQ>", "<PIECE_MK>",
+    "<PIECE_OP>", "<PIECE_ON>", "<PIECE_OB>",
+    "<PIECE_OR>", "<PIECE_OQ>", "<PIECE_OK>",
 ]
 
 EMPTY_TOKEN = "<EMPTY>"
@@ -31,9 +39,9 @@ EMPTY_TOKEN = "<EMPTY>"
 ANSWER_SPECIAL_TOKENS: list[str] = SQUARE_TOKENS + PIECE_TOKENS + [EMPTY_TOKEN]
 
 # POV-relative tokens (v3): 64 + 12 + 1 = 77
-POV_ANSWER_SPECIAL_TOKENS: list[str] = POV_SQUARE_TOKENS + PIECE_TOKENS + [EMPTY_TOKEN]
+POV_ANSWER_SPECIAL_TOKENS: list[str] = POV_SQUARE_TOKENS + POV_PIECE_TOKENS + [EMPTY_TOKEN]
 
-# (color, piece_type) → token string
+# (color, piece_type) → token string  (board-absolute)
 _PIECE_TO_TOKEN: dict[tuple[bool, int], str] = {
     (chess.WHITE, chess.PAWN):   "<PIECE_WP>",
     (chess.WHITE, chess.KNIGHT): "<PIECE_WN>",
@@ -47,6 +55,22 @@ _PIECE_TO_TOKEN: dict[tuple[bool, int], str] = {
     (chess.BLACK, chess.ROOK):   "<PIECE_BR>",
     (chess.BLACK, chess.QUEEN):  "<PIECE_BQ>",
     (chess.BLACK, chess.KING):   "<PIECE_BK>",
+}
+
+# (is_mine, piece_type) → token string  (POV-relative; True == side-to-move)
+_PIECE_TO_POV_TOKEN: dict[tuple[bool, int], str] = {
+    (True,  chess.PAWN):   "<PIECE_MP>",
+    (True,  chess.KNIGHT): "<PIECE_MN>",
+    (True,  chess.BISHOP): "<PIECE_MB>",
+    (True,  chess.ROOK):   "<PIECE_MR>",
+    (True,  chess.QUEEN):  "<PIECE_MQ>",
+    (True,  chess.KING):   "<PIECE_MK>",
+    (False, chess.PAWN):   "<PIECE_OP>",
+    (False, chess.KNIGHT): "<PIECE_ON>",
+    (False, chess.BISHOP): "<PIECE_OB>",
+    (False, chess.ROOK):   "<PIECE_OR>",
+    (False, chess.QUEEN):  "<PIECE_OQ>",
+    (False, chess.KING):   "<PIECE_OK>",
 }
 
 
@@ -126,6 +150,19 @@ SYSTEM_PROMPT = (
 _BLACK_IDX = torch.tensor([sq ^ 56 for sq in range(64)])
 
 
+def turn_tensor(fens: list[str]) -> torch.Tensor:
+    """(B,) bool tensor, True where ``fens[i]`` is black-to-move.
+
+    Paired with ``encode_planes(pov=False, turn=...)`` to drive the per-sample
+    spatial un-flip in absolute mode. The collate / eval-batch loop builds it
+    once from the FENs it's already parsing for plane construction.
+    """
+    return torch.tensor(
+        [chess.Board(f).turn == chess.BLACK for f in fens],
+        dtype=torch.bool,
+    )
+
+
 @torch.no_grad()
 def encode_positions(
     encoder,
@@ -164,12 +201,23 @@ def encode_positions(
     return hidden
 
 
-def encode_planes(encoder, planes: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
+def encode_planes(
+    encoder,
+    planes: torch.Tensor,
+    dtype: torch.dtype,
+    *,
+    pov: bool,
+    turn: torch.Tensor | None = None,
+) -> torch.Tensor:
     """Run the lc0 encoder on pre-built planes -> hidden states (B, 16, 64, 1024).
 
-    The planes come from our lc0_planes builder and are already POV-relative
-    (oriented to the side to move), so no post-hoc flip is needed. The encoder is
-    frozen, so it runs under no_grad.
+    The planes are POV-oriented (lc0 always encodes from side-to-move's
+    perspective). ``pov=True`` returns the hidden states unchanged. ``pov=False``
+    (absolute mode) un-flips the spatial axis for black-to-move samples so
+    index 0 always corresponds to absolute a1, matching ``<SQUARE_A1>..`` text
+    references; ``turn`` must then be a (B,) bool/int tensor with True/1 for
+    black-to-move samples. Feature semantics stay POV in both modes ("mine" =
+    side-to-move) — only the spatial axis differs.
 
     Two encoder interfaces are supported. Our lc0 (src/lc0_torch) returns only
     last_hidden_state, so we capture each layer by wrapping ``_forward_encoder``
@@ -194,7 +242,15 @@ def encode_planes(encoder, planes: torch.Tensor, dtype: torch.dtype) -> torch.Te
                 encoder(input_planes=planes, return_dict=True)
             finally:
                 del encoder._forward_encoder    # restore the bound method
-            return torch.stack(captured, dim=1).to(dtype)
+            hidden = torch.stack(captured, dim=1).to(dtype)
+        else:
+            out = encoder(planes, output_hidden_states=True)
+            hidden = torch.stack(out.all_hidden_states, dim=1).to(dtype)
 
-        out = encoder(planes, output_hidden_states=True)
-        return torch.stack(out.all_hidden_states, dim=1).to(dtype)
+    if not pov:
+        assert turn is not None, "absolute mode (pov=False) requires per-sample turn tensor"
+        black_idx = _BLACK_IDX.to(hidden.device)
+        is_black = turn.to(hidden.device).bool()
+        if is_black.any():
+            hidden[is_black] = hidden[is_black][:, :, black_idx, :]
+    return hidden

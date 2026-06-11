@@ -129,13 +129,6 @@ def encode_classical_112_planes(
     repetitions = _build_repetition_counts(boards)
     current_board = boards[-1]
     pov = current_board.turn
-    # Data is reflected to white-to-move in data prep; the trainer never mirrors
-    # text, so a stray black-to-move FEN would flip the planes against the
-    # (unmirrored) prompt/response. Fail loudly rather than train on a mismatch.
-    assert pov == chess.WHITE, (
-        "lc0_planes expects post-reflection white-to-move FENs; got black to move: "
-        + fen
-    )
 
     planes = torch.zeros(INPUT_PLANES, BOARD_SQUARES, dtype=torch.float32)
     piece_layout = (
