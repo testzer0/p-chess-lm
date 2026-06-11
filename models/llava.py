@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-from chesslm.models.base import (
+from models.base import (
     ChessLMConfig,
     ChessLMPreTrainedModel,
     apply_lora,

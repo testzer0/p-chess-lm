@@ -83,7 +83,7 @@ esac
 
 EXP_NAME="stage1_${EXP_TAG}_${DATASET_VERSION}_${LR_TAG}"
 
-python -m chesslm.train \
+python -m train \
     --arch              "$ARCH" \
     --lora-rank         "$LORA_RANK" \
     --exp-name          "$EXP_NAME" \

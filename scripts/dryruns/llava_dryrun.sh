@@ -7,7 +7,7 @@ set -xeuo pipefail
 
 source /scratch/gpfs/DANQIC/jeff/chesslm/.venv/bin/activate
 
-TEST_MODE=1 python -m chesslm.train \
+TEST_MODE=1 python -m train \
     --arch                llava \
     --lora-rank           16 \
     --exp-name            llava_dryrun \

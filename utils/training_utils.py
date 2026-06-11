@@ -1,5 +1,7 @@
 """Initialization and collation utilities for chess-LM training."""
 import functools
+import json
+import os
 
 import torch
 from datasets import load_from_disk
@@ -11,9 +13,9 @@ from transformers import (
     get_linear_schedule_with_warmup,
 )
 
-from chesslm.encoder.lc0_hf_bt5.hf_model import Lc0Bt4HFModel
-from chesslm.models import FlamingoChessLM, LLaVAChessLM
-from chesslm.utils.instance_format import (
+from encoder.lc0_hf_bt5.hf_model import Lc0Bt4HFModel
+from models import FlamingoChessLM, LLaVAChessLM
+from utils.instance_format import (
     KEY_EXTRA,
     KEY_FEN,
     KEY_HISTORY,
@@ -22,11 +24,12 @@ from chesslm.utils.instance_format import (
     to_standard_instance,
     tokenize_instance,
 )
-from chesslm.utils.lc0_planes import encode_fen_batch
-from chesslm.utils.special_tokens import (
+from utils.lc0_planes import encode_fen_batch
+from utils.special_tokens import (
     maybe_add_special_tokens,
     maybe_init_special_token_embeddings,
 )
+from utils.utils import turn_tensor
 
 
 # ---------------------------------------------------------------------------
@@ -64,6 +67,7 @@ def collate_fn(batch: list[dict], *, tokenizer, max_seq_len: int) -> dict:
         "attention_mask": attn_mask,
         "labels":         labels_out,
         "planes":         encode_fen_batch(fens, histories),
+        "turn":           turn_tensor(fens),
         "extra":          [s[KEY_EXTRA] for s in std],
     }
 
@@ -182,8 +186,16 @@ def init_optimizer_and_scheduler(args, model):
     return optimizer, scheduler
 
 
+def _load_dataset_pov(train_dataset_dir: str) -> bool:
+    """Read 'pov' from <train_dataset_dir>/dataset_config.json (single source of truth)."""
+    with open(os.path.join(train_dataset_dir, "dataset_config.json")) as f:
+        return bool(json.load(f)["pov"])
+
+
 def initialize_training_objects(args):
     """Top-level init. Returns everything the training loop needs."""
+    args.pov = _load_dataset_pov(args.train_dataset)
+    print(f"Dataset mode: {'POV-relative' if args.pov else 'board-absolute'} (args.pov={args.pov})")
     model, encoder, tokenizer = init_model_and_tokenizer(args)
     train_loader, eval_ds     = init_datasets_and_dataloader(args, tokenizer)
     optimizer, scheduler      = init_optimizer_and_scheduler(args, model)

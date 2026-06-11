@@ -68,7 +68,7 @@ esac
 # High-LR:  LR=2e-4 cosine,   _hilr suffix, --lr 2e-4 --scheduler cosine appended.
 EXP_NAME="stage1_${EXP_TAG}_${DATASET_VERSION}${HILR_SUFFIX:-}"
 
-python -m chesslm.train \
+python -m train \
     --arch              "$ARCH" \
     --lora-rank         "$LORA_RANK" \
     ${ARCH_EXTRA_ARGS} \

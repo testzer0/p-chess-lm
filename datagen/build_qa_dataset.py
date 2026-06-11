@@ -109,8 +109,8 @@ def main():
                 "prompt":   s["question"],
                 "response": s["answer"],
                 "extra": {
-                    "question_type": s["question_type"],
-                    "answer_class":  s["answer_class"],
+                    "task":         s["question_type"],
+                    "answer_class": s["answer_class"],
                 },
             })
 
