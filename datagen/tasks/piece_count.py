@@ -1,11 +1,9 @@
 """Task: piece_count — list piece counts for both sides.
 
-Deterministic: every question asks for the counts of both sides. No entity
-selection. Side markers are literal strings (`"white"`/`"black"` in abs,
-`"player"`/`"opponent"` in POV) since we have no special tokens for sides
-yet — they appear in both prose and parse_tag. Each side is guaranteed a
-king, so n=0 for any whole side is impossible; per-piece absences are
-simply omitted (no `<PIECE>0` or `<EMPTY>` entries).
+Deterministic: every question lists counts for both sides. Side markers
+are literal strings (`"white"`/`"black"` in abs, `"player"`/`"opponent"`
+in POV). Each side is guaranteed a king, so per-piece absences are simply
+omitted (no `<PIECE>0` or `<EMPTY>` entries).
 
 parse_tag layout (newline-separated):
 
@@ -14,10 +12,8 @@ parse_tag layout (newline-separated):
     {side2_label}
     {side2 compact piece list}
 
-Grader: sectioned multiset (`utils.eval_utils._piece_count_grade`) — the
-two side labels must match exactly; each side's compact piece line is
-compared as a counted multiset (so the order within a side is free, but
-pieces can't leak across sides).
+Graded by `utils.eval_utils._piece_count_grade`: side labels matched
+exactly; each side's compact piece line graded as a counted multiset.
 """
 import random
 
@@ -29,10 +25,10 @@ from datagen.prose import (
 )
 
 NAME = "piece_count"
+MAX_UNIQUE_QUERIES = 1
 
 # Probability of routing a question through the CoT (per-piece location walk)
-# template family vs the direct family. Hardcoded for now; lift to a CLI flag
-# when build_qa_dataset.py gains task-level options.
+# template family vs the direct family.
 COT_RATIO = 0.5
 
 PIECE_COUNT_QUESTIONS_TOK = [
@@ -86,7 +82,13 @@ def _side_walk(board: BoardRepr, counts: list[tuple[str, int]], rng: random.Rand
     return "; ".join(parts)
 
 
-def sample_one(board: BoardRepr, frequency: dict, rng: random.Random) -> dict:
+def _choose_entity(board: BoardRepr, frequency: dict, rng: random.Random,
+                   exclude: set) -> None:
+    """Only one possible query per position."""
+    return None
+
+
+def _render(_: None, board: BoardRepr, rng: random.Random) -> dict:
     # piece_tokens layout: indices 0..5 = side1 (W* / M*), 6..11 = side2 (B* / O*).
     s1_label, s2_label = _side_labels(board)
     s1_toks = list(board.piece_tokens[:6])
@@ -129,3 +131,17 @@ def sample_one(board: BoardRepr, frequency: dict, rng: random.Random) -> dict:
         "question_type": NAME,
         "answer_class":  answer_class,
     }
+
+
+def sample_n(board: BoardRepr, frequency: dict, rng: random.Random, n: int) -> list[dict]:
+    n = min(n, MAX_UNIQUE_QUERIES)
+    seen: set = set()
+    out: list[dict] = []
+    while len(out) < n:
+        e = _choose_entity(board, frequency, rng, exclude=seen)
+        seen.add(e)
+        out.append(_render(e, board, rng))
+    return out
+
+
+# `sample_one` and `sample_all` are synthesized in `datagen/tasks/__init__.py`.

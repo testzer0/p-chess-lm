@@ -1,10 +1,7 @@
 """Task: piece_on_rank — "what pieces are on this rank?"
 
-Single task with two prose families (direct vs CoT) sampled per question.
-Rank selection is uniform over the 8 ranks (no answer-side balance).
 Compact piece-with-count encoding `<PIECE>?N` in parse_tag + answer_class
-via `datagen.prose.encode_piece_count`; reused across the line tasks and
-piece_count. Grader: counted multiset (`utils.eval_utils._multiset_grade`).
+via `datagen.prose.line_facts`.
 """
 import random
 
@@ -17,10 +14,10 @@ from datagen.prose import (
 from utils.utils import EMPTY_TOKEN
 
 NAME = "piece_on_rank"
+MAX_UNIQUE_QUERIES = 8
 
 # Probability of routing a question through the CoT (per-square walk) template
-# family vs the direct family. Hardcoded for now; lift to a CLI flag when
-# build_qa_dataset.py gains task-level options.
+# family vs the direct family.
 COT_RATIO = 0.5
 
 RANK_QUESTIONS_TOK = [
@@ -47,12 +44,15 @@ RANK_EMPTY_ANSWERS_TOK = [
 ]
 
 
-def sample_one(board: BoardRepr, frequency: dict, rng: random.Random) -> dict:
-    # Uniform over the 8 ranks — no answer-side balance term. The frequency
-    # dict is still updated (via answer_class) for cross-task coupling.
-    rank_sqs = rng.choice(board.ranks())
-    f = line_facts(rank_sqs, board)
+def _choose_entity(board: BoardRepr, frequency: dict, rng: random.Random,
+                   exclude: set[tuple[int, ...]]) -> tuple[int, ...]:
+    """Uniform pick over `board.ranks() \\ exclude`."""
+    entities = [r for r in board.ranks() if r not in exclude]
+    return rng.choice(entities)
 
+
+def _render(rank_sqs: tuple[int, ...], board: BoardRepr, rng: random.Random) -> dict:
+    f = line_facts(rank_sqs, board)
     use_cot = rng.random() < COT_RATIO
 
     if not f["ordered"]:
@@ -85,3 +85,17 @@ def sample_one(board: BoardRepr, frequency: dict, rng: random.Random) -> dict:
         "question_type": NAME,
         "answer_class":  f["answer_class"],
     }
+
+
+def sample_n(board: BoardRepr, frequency: dict, rng: random.Random, n: int) -> list[dict]:
+    n = min(n, MAX_UNIQUE_QUERIES)
+    seen: set[tuple[int, ...]] = set()
+    out: list[dict] = []
+    while len(out) < n:
+        e = _choose_entity(board, frequency, rng, exclude=seen)
+        seen.add(e)
+        out.append(_render(e, board, rng))
+    return out
+
+
+# `sample_one` and `sample_all` are synthesized in `datagen/tasks/__init__.py`.

@@ -1,11 +1,8 @@
 """Task: piece_on_diagonal — "what pieces are on this diagonal?"
 
-Single task with two prose families (direct vs CoT) sampled per question.
-Diagonal selection is uniform over the 26 diagonals (13 up-right + 13
-up-left; both walk bottom-up). Compact piece-with-count encoding
-`<PIECE>?N` in parse_tag + answer_class via
-`datagen.prose.encode_piece_count`; reused across the line tasks and
-piece_count. Grader: counted multiset (`utils.eval_utils._multiset_grade`).
+26 diagonals (13 up-right + 13 up-left); both walk bottom-up. Compact
+piece-with-count encoding `<PIECE>?N` in parse_tag + answer_class via
+`datagen.prose.line_facts`.
 """
 import random
 
@@ -18,10 +15,10 @@ from datagen.prose import (
 from utils.utils import EMPTY_TOKEN
 
 NAME = "piece_on_diagonal"
+MAX_UNIQUE_QUERIES = 26
 
 # Probability of routing a question through the CoT (per-square walk) template
-# family vs the direct family. Hardcoded for now; lift to a CLI flag when
-# build_qa_dataset.py gains task-level options.
+# family vs the direct family.
 COT_RATIO = 0.5
 
 DIAGONAL_QUESTIONS_TOK = [
@@ -48,17 +45,20 @@ DIAGONAL_EMPTY_ANSWERS_TOK = [
 ]
 
 
-def sample_one(board: BoardRepr, frequency: dict, rng: random.Random) -> dict:
-    # Length-proportional pick over the 26 diagonals. Diagonals span 2..8
-    # squares; a 2-square corner carries far less information than the 8-square
-    # main, so weighting by length gives every square an equal chance of
-    # being in the queried diagonal (modulo the two diagonals per square).
-    # No answer-side balance term. The frequency dict is still updated (via
-    # answer_class) for cross-task coupling.
-    diagonals = board.diagonals()
-    diag_sqs  = rng.choices(diagonals, weights=[len(d) for d in diagonals], k=1)[0]
-    f = line_facts(diag_sqs, board)
+def _choose_entity(board: BoardRepr, frequency: dict, rng: random.Random,
+                   exclude: set[tuple[int, ...]]) -> tuple[int, ...]:
+    """Length-proportional pick over `board.diagonals() \\ exclude`.
 
+    Diagonals span 2..8 squares; weighting by length gives every square an
+    equal chance of being in the queried diagonal (modulo the two diagonals
+    per square).
+    """
+    entities = [d for d in board.diagonals() if d not in exclude]
+    return rng.choices(entities, weights=[len(d) for d in entities], k=1)[0]
+
+
+def _render(diag_sqs: tuple[int, ...], board: BoardRepr, rng: random.Random) -> dict:
+    f = line_facts(diag_sqs, board)
     use_cot = rng.random() < COT_RATIO
 
     if not f["ordered"]:
@@ -91,3 +91,17 @@ def sample_one(board: BoardRepr, frequency: dict, rng: random.Random) -> dict:
         "question_type": NAME,
         "answer_class":  f["answer_class"],
     }
+
+
+def sample_n(board: BoardRepr, frequency: dict, rng: random.Random, n: int) -> list[dict]:
+    n = min(n, MAX_UNIQUE_QUERIES)
+    seen: set[tuple[int, ...]] = set()
+    out: list[dict] = []
+    while len(out) < n:
+        e = _choose_entity(board, frequency, rng, exclude=seen)
+        seen.add(e)
+        out.append(_render(e, board, rng))
+    return out
+
+
+# `sample_one` and `sample_all` are synthesized in `datagen/tasks/__init__.py`.

@@ -1,8 +1,4 @@
-"""Task: square_of_piece — list squares holding a queried piece species.
-
-Self-contained: entity enumeration + frequency-aware weighter + build_qa all
-inline. Per plans/merge_data_pipelines.md, no shared TaskSpec/weighter.
-"""
+"""Task: square_of_piece — list squares holding a queried piece species."""
 import random
 from collections import defaultdict
 
@@ -11,6 +7,7 @@ from datagen.prose import join_oxford
 from utils.utils import EMPTY_TOKEN
 
 NAME = "square_of_piece"
+MAX_UNIQUE_QUERIES = 12
 
 PC_QUESTIONS_TOK = [
     "What square(s) is {piece_tok} on?",
@@ -30,17 +27,15 @@ PC_ABSENT_ANSWERS_TOK = [
 ]
 
 
-def sample_one(board: BoardRepr, frequency: dict, rng: random.Random) -> dict:
-    # Entities: the 12 piece tokens for this encoding (abs or POV). Answer-side
-    # weighting tokens for a piece are the sq_toks where it's found (or
-    # (EMPTY_TOKEN,) if absent). Multiplicity correction collapses the
-    # (EMPTY,) group when several pieces are absent. The summed sq_tok freqs
-    # naturally downweight high-cardinality species (pawns) and upweight rare
-    # ones, so we deliberately omit an explicit piece_tok freq term — adding
-    # one would force equal query rates across species despite very different
-    # answer-information densities (1-square king vs 8-square pawn).
-    entities = list(board.piece_tokens)
-    answer_tuples = []
+def _choose_entity(board: BoardRepr, frequency: dict, rng: random.Random,
+                   exclude: set[str]) -> str:
+    """Answer-side balance over `board.piece_tokens \\ exclude`.
+
+    Summed sq_tok freqs naturally downweight high-cardinality species; mult
+    correction collapses the (EMPTY,) group when several pieces are absent.
+    """
+    entities = [p for p in board.piece_tokens if p not in exclude]
+    answer_tuples: list[tuple[str, ...]] = []
     for piece_tok in entities:
         board_sqs = board.squares_with(piece_tok)
         if board_sqs:
@@ -55,8 +50,10 @@ def sample_one(board: BoardRepr, frequency: dict, rng: random.Random) -> dict:
         1.0 / ((sum(frequency.get(t, 0) for t in a) + 1) * mult[a])
         for a in answer_tuples
     ]
-    piece_tok = rng.choices(entities, weights=weights, k=1)[0]
+    return rng.choices(entities, weights=weights, k=1)[0]
 
+
+def _render(piece_tok: str, board: BoardRepr, rng: random.Random) -> dict:
     board_sqs = board.squares_with(piece_tok)
     if not board_sqs:
         fmt = {"piece_tok": piece_tok}
@@ -67,8 +64,7 @@ def sample_one(board: BoardRepr, frequency: dict, rng: random.Random) -> dict:
     else:
         sq_toks = [board.sq_tok(s) for s in board_sqs]
         # Randomize listing order so the model doesn't memorize a canonical
-        # enumeration. Prose and parse_tag share the same shuffled order;
-        # grader is multiset-match (chess_plan.md).
+        # enumeration. Prose and parse_tag share the same shuffled order.
         rng.shuffle(sq_toks)
         fmt = {"piece_tok": piece_tok, "squares": join_oxford(sq_toks)}
         q = rng.choice(PC_QUESTIONS_TOK).format(**fmt)
@@ -82,3 +78,17 @@ def sample_one(board: BoardRepr, frequency: dict, rng: random.Random) -> dict:
         "question_type": NAME,
         "answer_class":  answer_class,
     }
+
+
+def sample_n(board: BoardRepr, frequency: dict, rng: random.Random, n: int) -> list[dict]:
+    n = min(n, MAX_UNIQUE_QUERIES)
+    seen: set[str] = set()
+    out: list[dict] = []
+    while len(out) < n:
+        p = _choose_entity(board, frequency, rng, exclude=seen)
+        seen.add(p)
+        out.append(_render(p, board, rng))
+    return out
+
+
+# `sample_one` and `sample_all` are synthesized in `datagen/tasks/__init__.py`.

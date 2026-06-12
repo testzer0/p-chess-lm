@@ -1,0 +1,57 @@
+# Stage-1 QA dataset build.
+#
+# Run:
+#   python -m datagen.build_qa_dataset --config configs/datagen/stage1.yaml
+#
+# Override any leaf from the CLI:
+#   --override tasks.piece_on_square.num_positions=50000 splits.val.num_positions=2000
+
+seed: 0
+pov: true                           # pov=true → POV-relative tokens (M*/O*),
+                                    # pov=false → board-absolute tokens (W*/B*).
+output_path: data/stage1
+
+# Each task: how many positions to consume from train shards, and how many
+# distinct questions to generate per position. `num_questions` is silently
+# capped at the task's MAX_UNIQUE_QUERIES (a warning is printed).
+tasks:
+  piece_on_square:
+    num_positions: 200000
+    num_questions: 4
+  square_of_piece:
+    num_positions: 100000
+    num_questions: 2
+  piece_on_file:
+    num_positions: 60000
+    num_questions: 2
+  piece_on_rank:
+    num_positions: 60000
+    num_questions: 2
+  piece_on_diagonal:
+    num_positions: 80000
+    num_questions: 3
+  piece_count:
+    num_positions: 10000
+    num_questions: 1
+  material_count:
+    num_positions: 10000
+    num_questions: 1
+
+splits:
+  train:
+    shards: ["data/lichess/train-*.jsonl"]    # paths or globs
+
+  # val and test pick exactly ONE mode each:
+  #   mode A (num_positions): take N unique positions, run sample_all per task.
+  #                           Total records ≈ N × Σ(MAX_UNIQUE_QUERIES per task).
+  #   mode B (per_task + num_questions): each task gets per_task positions and
+  #                                      num_questions distinct queries per position.
+
+  val:
+    shards: ["data/lichess/val-*.jsonl"]
+    num_positions: 1000           # mode A
+
+  test:
+    shards: ["data/lichess/test-*.jsonl"]
+    per_task: 500                 # mode B
+    num_questions: 4
