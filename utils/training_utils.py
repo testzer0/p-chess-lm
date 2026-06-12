@@ -79,10 +79,11 @@ def collate_fn(batch: list[dict], *, tokenizer, max_seq_len: int) -> dict:
 def init_model_and_tokenizer(args):
     """Load the chess-LM (flamingo / llava) + lc0 encoder + tokenizer.
 
-    By default the tokenizer is expected to already contain every token the data
-    uses (the repo's chess tokenizers do), so nothing is added (n_new_tokens=0).
-    Set ``add_special_tokens: true`` in the config to instead add the answer
-    tokens here and train new embeddings for them (see utils/special_tokens.py).
+    Whether the chess answer tokens are added is decided automatically: if the
+    tokenizer already contains them (a chess-resized model) nothing is added
+    (n_new_tokens=0); otherwise they are added here and new embeddings are
+    trained for them (see utils/special_tokens.py). The token set (POV vs
+    board-absolute) follows ``args.pov``.
     """
     amp_dtype = {"bfloat16": torch.bfloat16, "float16": torch.float16,
                  "float32": torch.float32}[args.dtype]
@@ -91,7 +92,7 @@ def init_model_and_tokenizer(args):
     print("Loading tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(args.decoder_path, local_files_only=True)
     orig_vocab = len(tokenizer)
-    n_new_tokens = maybe_add_special_tokens(tokenizer, args)  # 0 unless flag set
+    n_new_tokens = maybe_add_special_tokens(tokenizer, args)  # 0 if already present
 
     arch = getattr(args, "arch", "flamingo")
     print(f"Loading model (arch={arch})...")

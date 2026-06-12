@@ -144,13 +144,10 @@ def parse_args():
     g.add_argument("--compile",      action="store_true", default=False,
                    help="torch.compile the model (faster steady-state, ~2min cold-start)")
 
-    # --- special tokens (optional; off by default — the tokenizer is expected to
-    #     already contain the chess answer tokens) ---
+    # --- special tokens (added automatically when the tokenizer lacks them) ---
     g = parser.add_argument_group("special tokens")
-    g.add_argument("--add-special-tokens", action="store_true", default=False,
-                   help="Add the POV chess answer tokens to the tokenizer + train new embeddings for them")
     g.add_argument("--embed-init", choices=["semantic", "random"], default="semantic",
-                   help="Init for added token embeddings (only with --add-special-tokens)")
+                   help="Init for added token embeddings (used only when tokens are added)")
 
     # --- data ---
     g = parser.add_argument_group("data")

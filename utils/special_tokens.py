@@ -1,18 +1,19 @@
-"""Optional chess special-token support (all the token-adding machinery).
+"""Chess special-token support (all the token-adding machinery).
 
-The repo's chess tokenizers already contain the answer tokens the data uses, so
-the runtime add path is gated by ``args.add_special_tokens``. When a tokenizer
-lacks them, set ``add_special_tokens: true`` in the config:
+Whether tokens are added is decided automatically: the answer-token set matching
+``args.pov`` is probed for its first token. If the tokenizer already contains it,
+the tokenizer is assumed to be a chess-resized one that already has every answer
+token and nothing is added; otherwise the whole set is added and embeddings are
+trained for them.
 
   * maybe_add_special_tokens     — adds the answer-token set to the tokenizer
                                    *before* the model is built (so n_new_tokens
-                                   is known).
+                                   is known), unless they are already present.
   * maybe_init_special_token_embeddings — semantically initializes the new
                                    embeddings *after* the model is built.
 
-Which token set is added (POV vs board-absolute) is selected by ``args.pov``,
-which the trainer sources from the dataset's ``dataset_config.json``. Both
-functions are no-ops when ``args.add_special_tokens`` is false.
+Which token set is used (POV vs board-absolute) is selected by ``args.pov``,
+which the trainer sources from the dataset's ``dataset_config.json``.
 """
 import chess
 import torch
@@ -38,14 +39,19 @@ _PIECE_WORDS = {
 
 def maybe_add_special_tokens(tokenizer, args) -> int:
     """Add the chess answer-token set matching ``args.pov`` to ``tokenizer``,
-    iff ``args.add_special_tokens``.
+    unless the tokenizer already contains them.
 
-    Returns the number of tokens added (0 when the flag is off). Call this BEFORE
+    The decision probes the first token of the set: if it is already in the
+    vocabulary the tokenizer is assumed to already hold the full chess answer
+    vocabulary (a resized model), so nothing is added; otherwise the whole set
+    is added so embeddings can be trained for them.
+
+    Returns the number of tokens added (0 when already present). Call this BEFORE
     building the model so the model can size its new-token embeddings.
     """
-    if not args.add_special_tokens:
-        return 0
     tok_set = POV_ANSWER_SPECIAL_TOKENS if args.pov else ANSWER_SPECIAL_TOKENS
+    if tok_set[0] in tokenizer.get_vocab():
+        return 0
     before = len(tokenizer)
     tokenizer.add_tokens(tok_set, special_tokens=True)
     return len(tokenizer) - before
@@ -59,7 +65,7 @@ def _mean_embedding(embed_weight: torch.Tensor, tokenizer, text: str) -> torch.T
 def maybe_init_special_token_embeddings(model, tokenizer, args) -> None:
     """Semantically initialize the newly added token embeddings.
 
-    No-op when the flag is off, no tokens were added, or embed_init='random'.
+    No-op when no tokens were added (already present) or embed_init='random'.
     Reads from the frozen pretrained embeddings; never modifies them.
 
     semantic init (POV mode, args.pov=True):
@@ -76,8 +82,7 @@ def maybe_init_special_token_embeddings(model, tokenizer, args) -> None:
         {"white", "black"}
       EMPTY token       ← embedding of 'empty'
     """
-    if (not args.add_special_tokens
-            or model.n_new_tokens == 0
+    if (model.n_new_tokens == 0
             or getattr(args, "embed_init", "semantic") == "random"):
         return
 
