@@ -1,19 +1,22 @@
-# Stage-1 QA dataset build.
+# Sample Stage-1 datagen config. Copy and tweak for a real run.
 #
-# Run:
-#   python -m datagen.build_qa_dataset --config configs/datagen/stage1.yaml
+#   python -m datagen.build_qa_dataset --config configs/sample_datagen.yaml
 #
-# Override any leaf from the CLI:
-#   --override tasks.piece_on_square.num_positions=50000 splits.val.num_positions=2000
+# CLI overrides for any nested field:
+#   --override tasks.piece_on_square.num_positions=50000 \
+#              splits.val.num_positions=2000 \
+#              output_path=data/stage1_v2
+#
+# See datagen/README.md for the full schema reference.
 
 seed: 0
-pov: true                           # pov=true → POV-relative tokens (M*/O*),
-                                    # pov=false → board-absolute tokens (W*/B*).
+pov: true                            # POV-relative tokens (M*/O*).
+                                     # Set false for board-absolute (W*/B*).
 output_path: data/stage1
 
-# Each task: how many positions to consume from train shards, and how many
-# distinct questions to generate per position. `num_questions` is silently
-# capped at the task's MAX_UNIQUE_QUERIES (a warning is printed).
+# Train budget per task: how many positions to consume from the train shards,
+# and how many distinct questions to generate per position. `num_questions`
+# is silently capped at each task's MAX_UNIQUE_QUERIES.
 tasks:
   piece_on_square:
     num_positions: 200000
@@ -41,17 +44,21 @@ splits:
   train:
     shards: ["data/lichess/train-*.jsonl"]    # paths or globs
 
-  # val and test pick exactly ONE mode each:
-  #   mode A (num_positions): take N unique positions, run sample_all per task.
-  #                           Total records ≈ N × Σ(MAX_UNIQUE_QUERIES per task).
-  #   mode B (per_task + num_questions): each task gets per_task positions and
-  #                                      num_questions distinct queries per position.
-
+  # val and test pick exactly ONE mode:
+  #   num_positions: N
+  #     Mode A. Take N unique positions; each task emits sample_all() on every
+  #     position. Total records ≈ N × Σ MAX_UNIQUE_QUERIES (≈ N × 120 for the
+  #     7 default tasks).
+  #
+  #   per_task: K   num_questions: Q
+  #     Mode B. Each task pulls K positions sequentially; each position emits
+  #     Q distinct queries (Q capped at MAX_UNIQUE_QUERIES per task).
+  #     Total records ≈ K × Q × num_tasks (modulo capping).
   val:
     shards: ["data/lichess/val-*.jsonl"]
-    num_positions: 1000           # mode A
+    num_positions: 1000              # Mode A — exhaustive per-position eval set
 
   test:
     shards: ["data/lichess/test-*.jsonl"]
-    per_task: 500                 # mode B
+    per_task: 500                    # Mode B — fixed per-task budget
     num_questions: 4

@@ -75,13 +75,13 @@ datasets, with FEN-level dedup between splits.
 
 ```bash
 # Run the config verbatim
-python -m datagen.build_qa_dataset --config configs/datagen/stage1.yaml
+python -m datagen.build_qa_dataset --config configs/sample_datagen.yaml
 
 # Reseed
-python -m datagen.build_qa_dataset --config configs/datagen/stage1.yaml --seed 7
+python -m datagen.build_qa_dataset --config configs/sample_datagen.yaml --seed 7
 
 # Tweak any nested field from the CLI without editing the YAML:
-python -m datagen.build_qa_dataset --config configs/datagen/stage1.yaml \
+python -m datagen.build_qa_dataset --config configs/sample_datagen.yaml \
     --override tasks.piece_on_square.num_positions=50000 \
                splits.val.num_positions=2000 \
                output_path=data/stage1_seed7
@@ -93,8 +93,7 @@ sentinel defaults — anything not passed falls back to the YAML value.
 ### Config format
 
 A complete reference config lives at
-[`configs/datagen/stage1.yaml`](../configs/datagen/stage1.yaml). Required
-top-level keys:
+[`configs/sample_datagen.yaml`](../configs/sample_datagen.yaml). Required top-level keys:
 
 | Key | Type | Notes |
 |---|---|---|
