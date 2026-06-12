@@ -26,7 +26,7 @@ COT_RATIO = 0.5
 RANK_QUESTIONS_TOK = [
     "What piece(s) are on the rank from {start_tok} to {end_tok}?",
     "Identify the piece(s) that occupy the {start_tok}{end_tok} rank.",
-    "In this position, the {start_tok}{end_tok} rank contains what pieces(s)?"
+    "In this position, the {start_tok}{end_tok} rank contains what piece(s)?"
 ]
 
 RANK_DIRECT_PRESENT_ANSWERS_TOK = [

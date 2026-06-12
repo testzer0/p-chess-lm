@@ -24,9 +24,9 @@ NAME = "piece_on_file"
 COT_RATIO = 0.5
 
 FILE_QUESTIONS_TOK = [
-    "What piece(s) is on the file from {start_tok} to {end_tok}?",
+    "What piece(s) are on the file from {start_tok} to {end_tok}?",
     "Identify the piece(s) that occupy the {start_tok}{end_tok} file.",
-    "In this position, the {start_tok}{end_tok} file contains what pieces(s)?"
+    "In this position, the {start_tok}{end_tok} file contains what piece(s)?"
 ]
 
 FILE_DIRECT_PRESENT_ANSWERS_TOK = [

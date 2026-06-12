@@ -27,7 +27,7 @@ COT_RATIO = 0.5
 DIAGONAL_QUESTIONS_TOK = [
     "What piece(s) are on the diagonal from {start_tok} to {end_tok}?",
     "Identify the piece(s) that occupy the {start_tok}{end_tok} diagonal.",
-    "In this position, the {start_tok}{end_tok} diagonal contains what pieces(s)?"
+    "In this position, the {start_tok}{end_tok} diagonal contains what piece(s)?"
 ]
 
 DIAGONAL_DIRECT_PRESENT_ANSWERS_TOK = [
