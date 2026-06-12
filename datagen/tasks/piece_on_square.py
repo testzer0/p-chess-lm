@@ -19,31 +19,37 @@ SQ_QUESTIONS_TOK = [
 ]
 
 SQ_OCCUPIED_ANSWERS_TOK = [
-    "There is a {piece_tok} on {sq_tok}.",
-    "{sq_tok} contains a {piece_tok}.",
-    "In this position, a {piece_tok} is on {sq_tok}.",
+    "There is {piece_tok} on {sq_tok}.",
+    "{sq_tok} contains {piece_tok}.",
+    "In this position, {piece_tok} is on {sq_tok}.",
 ]
 
 SQ_EMPTY_ANSWERS_TOK = [
     "{sq_tok} is empty.",
-    "There are no pieces on {sq_tok}.",
+    "There is no piece on {sq_tok}.",
 ]
 
 
 def sample_one(board: BoardRepr, frequency: dict, rng: random.Random) -> dict:
-    # Entities: all 64 board squares. Answer-side weighting tokens: just the
-    # piece on the square (sq_tok is 1-1 with entity choice so it doesn't help
-    # balance). Multiplicity correction pulls back the ~32 empty squares so
-    # the answer class sees uniform expected rate.
-    entities = list(range(64))
-    answer_tuples = [(board.piece_at(sq),) for sq in entities]
+    # Entities: all 64 board squares. Two independent shaping factors,
+    # multiplied to form the per-entity weight:
+    #   (1) piece-class balance — mult correction + piece_tok freq, so each
+    #       of the 13 answer classes (12 pieces + EMPTY) sees uniform rate.
+    #   (2) queried-square balance — sq_tok freq, so each of the 64 squares
+    #       is queried at uniform rate.
+    entities   = list(range(64))
+    piece_toks = [board.piece_at(sq) for sq in entities]
+    sq_toks    = [board.sq_tok(sq)   for sq in entities]
 
-    mult: dict[tuple, int] = defaultdict(int)
-    for a in answer_tuples:
-        mult[a] += 1
+    mult: dict[str, int] = defaultdict(int)
+    for p in piece_toks:
+        mult[p] += 1
     weights = [
-        1.0 / ((sum(frequency.get(t, 0) for t in a) + 1) * mult[a])
-        for a in answer_tuples
+        1.0 / (
+            (frequency.get(p, 0) + 1) * mult[p]
+            * (frequency.get(s, 0) + 1)
+        )
+        for p, s in zip(piece_toks, sq_toks)
     ]
     sq = rng.choices(entities, weights=weights, k=1)[0]
 

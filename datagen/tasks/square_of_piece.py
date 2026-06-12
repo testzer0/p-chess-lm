@@ -7,7 +7,7 @@ import random
 from collections import defaultdict
 
 from utils.board_representation import BoardRepr
-from datagen.prose import prose_list
+from datagen.prose import join_oxford
 from utils.utils import EMPTY_TOKEN
 
 NAME = "square_of_piece"
@@ -20,8 +20,8 @@ PC_QUESTIONS_TOK = [
 
 PC_PRESENT_ANSWERS_TOK = [
     "{piece_tok} can be found on {squares}.",
-    "In this position, {piece_tok} are on {squares}.",
-    "{piece_tok} are at {squares}.",
+    "In this position, {piece_tok} is on {squares}.",
+    "{piece_tok} occupies {squares}.",
 ]
 
 PC_ABSENT_ANSWERS_TOK = [
@@ -33,8 +33,12 @@ PC_ABSENT_ANSWERS_TOK = [
 def sample_one(board: BoardRepr, frequency: dict, rng: random.Random) -> dict:
     # Entities: the 12 piece tokens for this encoding (abs or POV). Answer-side
     # weighting tokens for a piece are the sq_toks where it's found (or
-    # (EMPTY_TOKEN,) if absent). Multiplicity correction matters here when
-    # several piece species share no occurrences and thus answer-class EMPTY.
+    # (EMPTY_TOKEN,) if absent). Multiplicity correction collapses the
+    # (EMPTY,) group when several pieces are absent. The summed sq_tok freqs
+    # naturally downweight high-cardinality species (pawns) and upweight rare
+    # ones, so we deliberately omit an explicit piece_tok freq term — adding
+    # one would force equal query rates across species despite very different
+    # answer-information densities (1-square king vs 8-square pawn).
     entities = list(board.piece_tokens)
     answer_tuples = []
     for piece_tok in entities:
@@ -62,7 +66,11 @@ def sample_one(board: BoardRepr, frequency: dict, rng: random.Random) -> dict:
         answer_class = [piece_tok, EMPTY_TOKEN]
     else:
         sq_toks = [board.sq_tok(s) for s in board_sqs]
-        fmt = {"piece_tok": piece_tok, "squares": prose_list(sq_toks)}
+        # Randomize listing order so the model doesn't memorize a canonical
+        # enumeration. Prose and parse_tag share the same shuffled order;
+        # grader is multiset-match (chess_plan.md).
+        rng.shuffle(sq_toks)
+        fmt = {"piece_tok": piece_tok, "squares": join_oxford(sq_toks)}
         q = rng.choice(PC_QUESTIONS_TOK).format(**fmt)
         a = rng.choice(PC_PRESENT_ANSWERS_TOK).format(**fmt)
         parse_tag    = f"{piece_tok}{''.join(sq_toks)}"
