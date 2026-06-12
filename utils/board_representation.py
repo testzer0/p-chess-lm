@@ -106,25 +106,80 @@ class BoardRepr:
         }
 
     # ------------------------------------------------------------------
-    # Geometric entity enumeration (board-absolute square indices)
-    # POV rendering is downstream via sq_tok. FEN-independent.
+    # Geometric entity enumeration. Each entity is a tuple of board square
+    # indices ordered to match canonical render order under sq_tok:
+    #   pov=False : board-absolute, bottom-up   (a-file = a1..a8, etc.)
+    #   pov=True  : POV bottom-up from side-to-move's view  (POV col c reads
+    #               POV idx [c, c+8, ..., c+56], regardless of color)
+    # FEN-independent geometry (POV flip handled here, not in callers).
     # ------------------------------------------------------------------
 
+    def _pov_idx_to_board(self, pov_idx: int) -> int:
+        return pov_idx ^ 56 if self._is_black_pov else pov_idx
+
     def files(self) -> list[tuple[int, ...]]:
-        """8 files, each (rank-1 .. rank-8) for that file."""
+        """8 files, each enumerated bottom-up in render order."""
+        if self.pov:
+            return [
+                tuple(self._pov_idx_to_board(c + r * 8) for r in range(8))
+                for c in range(8)
+            ]
         return [tuple(chess.square(f, r) for r in range(8)) for f in range(8)]
 
     def ranks(self) -> list[tuple[int, ...]]:
-        """8 ranks, each (file-a .. file-h) for that rank."""
+        """8 ranks, each enumerated left-to-right in render order."""
+        if self.pov:
+            return [
+                tuple(self._pov_idx_to_board(c + r * 8) for c in range(8))
+                for r in range(8)
+            ]
         return [tuple(chess.square(f, r) for f in range(8)) for r in range(8)]
 
     def diagonals(self) -> list[tuple[int, ...]]:
-        """13 rising diagonals (rank - file = c, c in [-6, 6], length >= 2).
+        """26 diagonals (13 up-right + 13 up-left), length >= 2.
 
-        Falling-axis diagonals are intentionally omitted — see the locked
-        decision in plans/merge_data_pipelines.md.
+        All enumerated lowest-rank-first, so both groups walk bottom-up
+        from the player's view; they differ only by horizontal direction:
+
+        Up-right (rank - file = c,  c in [-6, 6]):
+            e.g. a1->h8 main, a2->g8, b1->h7.
+        Up-left  (file + rank = c', c' in [1, 13]):
+            e.g. h1->a8 anti, g1->a7, h2->b8.
+
+        POV mode applies the LC0 vertical mirror to the board squares; the
+        rank/file used for the c constants is POV's, so for black-to-move
+        the "POV up-right" set maps to board squares that descend in
+        absolute rank but still read up-right from the player.
         """
-        return [
-            tuple(chess.square(f, f + c) for f in range(8) if 0 <= f + c < 8)
+        if self.pov:
+            up_right = [
+                tuple(
+                    self._pov_idx_to_board(f + (f + c) * 8)
+                    for f in range(max(0, -c), min(8, 8 - c))
+                )
+                for c in range(-6, 7)
+            ]
+            up_left = [
+                tuple(
+                    self._pov_idx_to_board(f + (cp - f) * 8)
+                    for f in range(min(7, cp), max(0, cp - 7) - 1, -1)
+                )
+                for cp in range(1, 14)
+            ]
+            return up_right + up_left
+
+        up_right = [
+            tuple(
+                chess.square(f, f + c)
+                for f in range(max(0, -c), min(8, 8 - c))
+            )
             for c in range(-6, 7)
         ]
+        up_left = [
+            tuple(
+                chess.square(f, cp - f)
+                for f in range(min(7, cp), max(0, cp - 7) - 1, -1)
+            )
+            for cp in range(1, 14)
+        ]
+        return up_right + up_left

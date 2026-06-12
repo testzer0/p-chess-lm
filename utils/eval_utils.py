@@ -41,21 +41,56 @@ def _final_answer(text: str) -> str:
 # extracted from each answer segment; tasks listed in _GRADERS override.
 # ---------------------------------------------------------------------------
 
-_TOKEN_RE = re.compile(r"<(?:SQUARE|PIECE)_[A-Z0-9]+>|<EMPTY>")
+# Token regex: a SQUARE/PIECE/EMPTY token optionally followed by a count
+# (e.g. '<PIECE_WP>2' = two white pawns). Missing count = 1.
+_TOKEN_RE = re.compile(r"(<(?:SQUARE|PIECE)_[A-Z0-9]+>|<EMPTY>)(\d+)?")
+
+
+def _parse_token_multiset(s: str) -> Counter:
+    c: Counter = Counter()
+    for tok, n in _TOKEN_RE.findall(s):
+        c[tok] += int(n) if n else 1
+    return c
 
 
 def _multiset_grade(pred: str, gold: str) -> bool:
-    return Counter(_TOKEN_RE.findall(pred)) == Counter(_TOKEN_RE.findall(gold))
+    return _parse_token_multiset(pred) == _parse_token_multiset(gold)
 
 
 def _exact_grade(pred: str, gold: str) -> bool:
     return pred.strip() == gold.strip()
 
 
+def _piece_count_grade(pred: str, gold: str) -> bool:
+    """Sectioned multiset grader for piece_count.
+
+    parse_tag layout is exactly 4 non-blank lines:
+
+        {side1_label}                       e.g. "white" / "player"
+        {compact piece list for side1}      e.g. "<PIECE_WP>5<PIECE_WN>2..."
+        {side2_label}                       e.g. "black" / "opponent"
+        {compact piece list for side2}
+
+    The side labels must match exactly; piece lines are compared as
+    counted multisets via `_parse_token_multiset` (so the order within
+    a side is free, but pieces must not leak across sides).
+    """
+    pred_lines = [ln.strip() for ln in pred.strip().split("\n") if ln.strip()]
+    gold_lines = [ln.strip() for ln in gold.strip().split("\n") if ln.strip()]
+    if len(pred_lines) != 4 or len(gold_lines) != 4:
+        return False
+    if pred_lines[0] != gold_lines[0] or pred_lines[2] != gold_lines[2]:
+        return False
+    return (
+        _parse_token_multiset(pred_lines[1]) == _parse_token_multiset(gold_lines[1])
+        and _parse_token_multiset(pred_lines[3]) == _parse_token_multiset(gold_lines[3])
+    )
+
+
 _DEFAULT_GRADER: Callable[[str, str], bool] = _multiset_grade
 _GRADERS: dict[str, Callable[[str, str], bool]] = {
     "material_count": _exact_grade,
-    "piece_count":    _exact_grade,
+    "piece_count":    _piece_count_grade,
 }
 
 
