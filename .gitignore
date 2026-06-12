@@ -26,5 +26,11 @@ data/
 plans/
 experiments/
 
+# Datagen unit tests
+datagen/tests/
+
 # Hanoi
 hanoi/
+
+# virtual env/
+.venv/
