@@ -64,8 +64,11 @@ def encode_piece_count(piece_tok: str, n: int) -> str:
 # ---------------------------------------------------------------------------
 
 def format_piece_counts(counts_in_order: list[tuple[str, int]]) -> str:
-    """[('<PIECE_WB>', 2), ('<PIECE_BR>', 1)] -> '2 <PIECE_WB> and 1 <PIECE_BR>'."""
-    return join_oxford([f"{c} {tok}" for tok, c in counts_in_order])
+    """[('<PIECE_WB>', 2), ('<PIECE_BR>', 1)] -> '2 <PIECE_WB>s and 1 <PIECE_BR>'.
+
+    The piece token is pluralized via `plural()` for n != 1 (cosmetic prose
+    only; parse_tag/answer_class use the compact count encoding, not this)."""
+    return join_oxford([f"{c} {plural(tok, c)}" for tok, c in counts_in_order])
 
 
 def format_square_breakdown(items: list[tuple[str, Optional[str]]]) -> str:

@@ -6,7 +6,7 @@
 arch: flamingo
 lora_rank: -1            # frozen decoder; train only the cross-attention bridge
 dtype: bfloat16
-decoder_path: /scratch/gpfs/DANQIC/ab4197/mydata/p-chess-lm/models/SmolLM3-3B-stage1-step-3440000
+decoder_path: /scratch/gpfs/DANQIC/ab4197/mydata/p-chess-lm/local/SmolLM3-3B-stage1-step-3440000
 encoder_path: /scratch/gpfs/DANQIC/ab4197/mydata/p-chess-lm/data/engines/lc0_hf_bt5
 
 # --- special tokens: added automatically when the tokenizer lacks them ---
@@ -15,8 +15,8 @@ encoder_path: /scratch/gpfs/DANQIC/ab4197/mydata/p-chess-lm/data/engines/lc0_hf_
 # Point decoder_path at a model already resized to the chess vocab to skip this.
 
 # --- data (the dryrun fixture: 3000 train / 100 eval) ---
-train_dataset: /scratch/gpfs/DANQIC/ab4197/mydata/p-chess-lm/lab/merged_code/data/stagewise/stage1_dryrun/train
-eval_dataset:  /scratch/gpfs/DANQIC/ab4197/mydata/p-chess-lm/lab/merged_code/data/stagewise/stage1_dryrun/eval
+train_dataset: /scratch/gpfs/DANQIC/ab4197/mydata/p-chess-lm/data/stagewise/stage1_dryrun/train
+eval_dataset:  /scratch/gpfs/DANQIC/ab4197/mydata/p-chess-lm/data/stagewise/stage1_dryrun/eval
 num_workers: 2
 
 # --- training (small, for a quick smoke) ---
@@ -38,4 +38,4 @@ log_samples: 4
 
 # --- output ---
 exp_name: dryrun
-output_dir: /scratch/gpfs/DANQIC/ab4197/mydata/p-chess-lm/lab/merged_code/runs_dryrun
+output_dir: /scratch/gpfs/DANQIC/ab4197/mydata/p-chess-lm/runs_dryrun

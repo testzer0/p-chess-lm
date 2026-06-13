@@ -34,3 +34,16 @@ hanoi/
 
 # virtual env/
 .venv/
+
+# ---- kept at repo root, local-only (not part of the unified repo) ----
+# Heavy stores / external symlinks, lab scratch space, and per-machine files.
+/local
+/data/
+/reports/
+/lab/
+/joblog
+/CLAUDE.md
+/ASSUMPTIONS.md
+/claude.resume
+/.claude/
+/.venv.bak-py310/
